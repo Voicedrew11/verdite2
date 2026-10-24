@@ -37,6 +37,7 @@ namespace Kf2;
 public static class MapKey
 {
     const uint PlayerStage = 0x8002A550;
+    const uint Viewer = 0x80019B54;
 
     const uint Inventory = 0x8009B52C;      // u8 per item id, 0 = not held
     const uint FirstMap = 0x43, LastMap = 0x45;
@@ -53,6 +54,7 @@ public static class MapKey
     public static bool Enabled { get; private set; } = true;
 
     static volatile bool _request, _open, _closeHeld;
+    static bool _queued, _viewerQueued;
     static long _requestedAt, _overlayAt = -1_000_000;
     static long _lastFrame = -1;
     static double _testAt;
@@ -100,6 +102,7 @@ public static class MapKey
 
     public static void Install()
     {
+        HookAttach.OnOverlayLoad("map viewer", AttachViewer);
         if (!Enabled) return;
 
         Event.AddListener<KeyboardEvent>(e =>
@@ -158,13 +161,47 @@ public static class MapKey
         SymbolRegistry.Build();
         var target = SymbolRegistry.Resolve("game", null, PlayerStage);
         if (target == null) return false;
-        var impl = typeof(MapKey).GetMethod(nameof(AfterPlayerStage), BindingFlags.Public | BindingFlags.Static)!;
-        if (!HookManager.AddPost(_self, target, impl)) return false;
+        if (!_queued)
+        {
+            var impl = typeof(MapKey).GetMethod(nameof(AfterPlayerStage), BindingFlags.Public | BindingFlags.Static)!;
+            _queued = HookManager.AddPost(_self, target, impl);
+            if (!_queued) return false;
+        }
         HookManager.Commit();
 
         bool ok = HookAttach.Installed(target);
         Console.WriteLine(ok ? "[KF2] map key: on (M, touchpad)" : "[KF2] map key: the stage 3 hook did not install");
         return ok;
+    }
+
+    /// <summary>The viewer's watchdog hold, attached with the key on or off.</summary>
+    static bool AttachViewer()
+    {
+        SymbolRegistry.Build();
+        var viewer = SymbolRegistry.Resolve("game", null, Viewer);
+        if (viewer == null) return false;
+        if (!_viewerQueued)
+        {
+            var hold = typeof(MapKey).GetMethod(nameof(ViewerUnwatched), BindingFlags.NonPublic | BindingFlags.Static)!;
+            _viewerQueued = HookManager.AddReplace(_self, viewer, hold);
+            if (!_viewerQueued) return false;
+        }
+        HookManager.Commit();
+        bool ok = HookAttach.Installed(viewer);
+        if (!ok) Console.WriteLine("[KF2] map key: the viewer's watchdog hold did not install");
+        return ok;
+    }
+
+    /// <summary>The viewer, from the ITEM page or the key, with the hang watchdog
+    /// paused: it draws the picture twice and then polls the pad, presenting nothing,
+    /// until a button, so a map looked at for 15 s wrote a hang report. See "The maps"
+    /// in docs/GAME_INTERNALS.md.</summary>
+    static void ViewerUnwatched(Action<CpuContext, IMemory> orig, CpuContext c, IMemory m)
+    {
+        bool was = RecompOne.Runtime.Diagnostics.Watchdog.Paused;
+        RecompOne.Runtime.Diagnostics.Watchdog.Paused = true;
+        try { orig(c, m); }
+        finally { RecompOne.Runtime.Diagnostics.Watchdog.Paused = was; }
     }
 
     /// <summary>End of main-loop stage 3, on a world tick. A press older than half a

@@ -289,7 +289,10 @@ presses Circle by itself; and past 600 frames without stage 3 returning the
 policy presses Circle three times and Cross.
 
 **What it does not exercise:** the GL renderer (`GpuWorld`, the retained scene,
-occlusion, reflections and every shader) and anything drawn by the host thread.
+occlusion, reflections and every shader) and anything drawn by the host thread. Nor the deferred MO pose
+(`MoPose.Defer` needs the GPU world's instances), which is where a player's crash in
+area 4 came from; see "A rigid submit decoded a stale pose" in
+[GPU_RENDERER.md](GPU_RENDERER.md).
 The C# patches that build packets in guest RAM all run: `Stage13`, `ModelWalk`,
 `MoPose`, `TileWalk`, `PolyAssembler` and the rest.
 
