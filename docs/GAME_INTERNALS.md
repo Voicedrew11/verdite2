@@ -1649,6 +1649,84 @@ most once a second, so a player's log says whether this was their freeze.
 Measured at the sweep's spot: nudged `-634, 634`, and play goes on. Picture and
 feel are not judged.
 
+### The model heap overran its end
+
+Reported 2026-10-24 (issue #79): the boss gauntlet in area 6 (`fdat20`, map 7)
+crashed with `unmapped address: 0xA40FB52F` in the HUD builder `func_80031D5C`,
+or froze, between the first and fourth boss. Both crash reports carry the same
+address, and both fail on the compass (record 0 at `0x80067774`, model 0):
+`func_8002E1BC(0)` returned `0xA40FB52B` as its mesh. The fuzzer had already found
+the same failure as "the C# object walk crashes or hangs after a warp into area 2
+or 6" (seed 1020: `0xA4D7D0BE`, again under the HUD builder, and with a RAM dump).
+
+**The heap.** The game streams creature and object models into a heap at
+`0x8009BFE4`, `0x5F000` bytes (GAME.EXE, set up by `func_80017664`; a second heap at
+`0x801B3188` uses the same routines). A block is a header `{u8 state, u32 size,
+u32 owner}` and its data; the next block is at `+0xC + size`, and a `0xFF` state
+ends the heap. The states: 0 free, 1 evictable, 2 in use, 3 loading. `owner`
+points at the model's slot in the table at `0x8018E1A0`, which holds the address of
+the block's data. Each frame the object walk fills a "wanted" bitmap, and
+`func_8003309C` (models) and `func_80032FAC` (CLUTs) turn it into states: a
+wanted slot that is empty is loaded (`func_80032F10`, which allocates and sets 3),
+a wanted evictable one goes back to 2, and an unwanted one in use goes to 1.
+`func_80032CD8` lets a model draw in state 1 or 2.
+
+| routine | does |
+|---|---|
+| `func_80017664` | heap init: one free block, `0xFF` at `base + len - 4` |
+| `func_80017390` | find a free block of at least the size asked; 0 when none |
+| `func_80017684` | allocate: find, else compact and find again; split when 2060+ bytes would be left |
+| `func_80017580` | compact: free every state-1 block, slide the in-use ones down, one free header over what is left |
+| `func_800174E8` | wait out every state-3 block (a load in flight) |
+
+**The bug is the game's.** The compaction ends with
+`u8[dest] = 0; u32[dest + 4] = end - dest - 0xC`, where `end` is the terminator.
+When nothing was evictable the heap is already packed and `dest == end`: the
+terminator becomes a free block of size `-0xC`, and the size word lands four bytes
+past the heap. The search that follows reads `0xFFFFFFF4` as a free block of 4 GB
+and allocates there. The block is never split (the remainder test is signed), so it
+is stamped state 2 with that size, and the model is loaded from `0x800FAFEC` on:
+over GAME.EXE's static models, which start right after the heap. Slots 0-16 sit at
+`0x800FB018`-`0x800FC658`, the HUD's among them, so the compass's mesh word is
+garbage. That is the crash. A walk that reaches the `-0xC` block steps onto itself
+for ever, `func_80017390` under `func_80017684`. That is the hang. Read from the
+seed-1020 dump: 19 blocks, all state 2, packed edge to edge; the 20th at
+`0x800FAFE0` (the terminator's address) is `{2, 0xFFFFFFF4, slot 0x182}`. Slots
+0-16 point into the overwritten region, and slot 0's `+8` reads `0x10001`.
+
+**What made it reachable is the port's.** Allocation takes a whole free block when
+less than 2060 bytes would be left, so a heap under pressure packs exactly. A
+packed heap with nothing evictable needs every resident model to be wanted in the
+same frame, and the C# object walk wanted more than the game does. With planar
+reflections on (the default), a model only the mirror's cull admits was marked in
+the bitmaps too. The game then streamed in and pinned whatever the mirror could
+see. All four logs in the issue have planar reflections on; the fuzz findings were
+gone with `KF2_MODELWALK=0`, which drops the mirror's cull with the walk. The
+console's view never filled the heap, as far as anyone has played it.
+
+**Fixed twice over:**
+
+- `ModelWalk` no longer marks a mirror-only creature or object as wanted; it is
+  drawn in the mirror only while resident (see "The planar walk is the reflection,
+  with a cull of its own" in [RENDERING.md](RENDERING.md)). `KF2_MODELWALK=verify`
+  in area 1 went from a RAM mismatch on 251 of 251 walks (68 bytes from
+  `0x800A5014`, ours `03`, a load) to 0 of 274.
+- `patches/HeapGuard.cs` replaces the compaction with the routine plus a fence. It
+  finds the terminator first, and puts it and the word after it back if the routine
+  wrote over them. The allocation then answers 0. Both callers (`func_80032F10`,
+  `func_800492B8`) skip their load on a 0, and the walk asks again next frame once
+  something has gone evictable. `KF2_HEAPGUARD=0` is the comparison. The fuzzer
+  reports each time the guard fires as a `heap-full` violation.
+
+**Measured:** seeds 1018 (hang) and 1020 (crash), and 1019, play to 20000 frames
+with both fixes, with the walk's fix alone (`KF2_HEAPGUARD=0`, the guard never
+fired), and with the guard alone (the old walk). With the guard alone it fired 1,
+61 and 90 times in a run and nothing broke. **Not reproduced in the gauntlet
+itself**: the fix is from the same address shape, site and record, and the
+reporter's own RAM dumps were not attached. Whether a boss the game wants fails to
+appear while the guard is refusing loads has not been seen. With the walk's fix
+the guard has not fired.
+
 ### `func_8002C3A8` is the floor-height query
 
 `func_8002C3A8(mode, x, z, radius, /*sp+0x10*/ height)` returns the ground `Y` for

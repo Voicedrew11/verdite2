@@ -226,6 +226,131 @@ dispatcher, is *not* in any committed patch, and is mentioned here and in
 `CLAUDE.md` only so that a reference to it is not mistaken for a missing feature.
 Re-add it by hand if you need indirect-call tracing.
 
+## Fuzzing headless playthroughs
+
+`scripts/fuzz.py` plays the game many times at once with nobody watching, and
+sorts what went wrong by where it went wrong:
+
+```bash
+python3 scripts/fuzz.py --runs 48 --frames 20000            # six at a time by default
+python3 scripts/fuzz.py --runs 36 --guards off --seed-base 1000
+python3 scripts/fuzz.py --runs 1 --seed-base 1020           # one seed again
+python3 scripts/fuzz.py --replay fuzz/runs/001020 [--windowed]
+```
+
+It writes `fuzz/report.md` and `report.json` (gitignored): outcome counts, then one
+heading per signature with its seeds, an example run and the two ways to get it
+again. A run is **crash** (a crash report, or the process died), **hang** (a hang
+report from the watchdog, then killed), **fault** (a hook-fault report), **violation**
+(an invariant below), **guard** (a `HitGuard`/`WallGuard` line) or **ok**. The
+signature is the report's top four frames past the memory and dispatch plumbing;
+a hang whose game thread called nothing has no stack, and is named by the overlay
+and area in the report's `== Game ==` block instead. Each run has its own
+directory under `fuzz/runs/<seed>/`, with copies of the cards, `settings.json` and
+`interface.ini`, so runs never write the repo's; an ok run keeps only its log and
+its recording.
+
+### What a run is
+
+Four switches, each usable alone:
+
+- **`KF2_HEADLESS=1`** (`0111`): no window, no GL context, no audio device. The
+  software GPU still takes every packet, but does not rasterize
+  (`KF2_HEADLESS_RASTER=1` puts the pixels back); that was half of a headless
+  frame. There is no ImGui and no host-thread pump, so anything that waits on
+  `SettingsStore.OnHost` never finishes, which is how the first finding came
+  about (below).
+- **`KF2_TURBO=1`**: `FramePacing` makes every frame boundary a tick and stops
+  waiting (`Interrupts.Turbo` forces the vblank wait, the floor and the present's
+  ceiling are skipped), and turns `MenuPacing`, `LoadPacing` and `LoopPacing` off,
+  since each holds something to wall time. `FramePacing.Boundary` is the event a
+  frame raises; `VSyncEvent` is still the 60 Hz wall-clock vblank and is no use
+  for counting frames here.
+- **`KF2_FUZZ=<seed>`** (`patches/Fuzz.cs`): the game's `rand` seeded from it
+  (`BiosA`'s seed, by reflection; the game never seeds it), then a weighted pad
+  policy stepped on frames once `KF2_AUTOSTART` has it in an area: walk and
+  turn, back up, strafe, look, attack, cast, Cross, the menu (Circle) wandered
+  with releases between presses, now and then Start or Select. Macros a few times
+  in ten thousand decisions, run at the end of stage 3: `warp <area>`
+  (`AreaWarp`), `load <slot>` (`AutoReload.LoadSlot`) and `goto` (a random spot
+  in the tile map). A return to the title disarms it and `AutoStart` boots in
+  again.
+- **Invariants**, every frame but for 600 after an overlay load, a death or a
+  macro: HP ≤ max HP, MP ≤ max MP, area 0-7, level 1-99, position inside the
+  80×80 tile map, every live creature's descriptor pointer inside
+  `0x80172624..0x801758E4`, and stage 3 returning (a stall of 6000 frames, named
+  by the recompiled frames on the game thread's stack).
+
+The policy cannot leave a loop of the game's that polls the pad with no frame
+between (the menu's repeat gate `func_80022E90` spins on `VSync` while a button
+is held, and the menu's steppers do not edge-detect), so past 20000 pad reads or
+15 vblanks without a frame the pad listener releases, presses Cross, releases and
+presses Circle by itself; and past 600 frames without stage 3 returning the
+policy presses Circle three times and Cross.
+
+**What it does not exercise:** the GL renderer (`GpuWorld`, the retained scene,
+occlusion, reflections and every shader) and anything drawn by the host thread.
+The C# patches that build packets in guest RAM all run: `Stage13`, `ModelWalk`,
+`MoPose`, `TileWalk`, `PolyAssembler` and the rest.
+
+**Speed:** about 650 frames a second for one run and 430-850 each with six at
+once, so 48 runs of 20000 frames (17.8 hours of play at 15 ticks a second) took
+328 s on this machine.
+
+### Getting a finding again
+
+Neither way is exact: the game runs on several threads and the runtime's vblank
+is wall-clock time. **Rerunning the seed is the better of the two**, because the
+policy reacts to what happens (its escapes fire when the game stalls, not on a
+recorded frame): seeds 1020 and 1024 crashed at the same place on every rerun,
+and seed 1018 hung at the same frame with an identical input stream. Each run's
+`fuzz-input.log` records the buttons on the frame they changed and each macro
+with its arguments, and `--replay` presses them back; that replay is blind, and
+diverges once a load or a loop takes a different number of frames (1018's replay
+stalled in a menu instead). `--replay --windowed` plays it at the normal rate in
+a window, to look at.
+
+For a hang, `dotnet-stack` works on a fuzz run as on any other ("For a hang,
+take the managed stack of the live process"): `--hang 300` holds the watchdog off
+for long enough to find the process.
+
+### What it found
+
+- **RUN SETUP hung headless**: `SettingsPage.RunSetup` waits on `Setup.Busy`,
+  which only the host thread's `OnHost` callback clears. `Setup.Open` now refuses
+  when headless. Headless only; no player could reach it.
+- **The C# object walk crashes and hangs after a warp into area 2 or 6.** With
+  the guards on, 3 of 24 runs (seeds 2000, 2013, 2022) and 4 of 36 before them
+  hung within 700 frames of a `warp 2` or `warp 6`, and seed 1020 crashed in
+  `MoPose.Run` on an unmapped address (`0xA4D7D0BE`) handed down by
+  `ModelWalk`. One live hang's stack is `ModelWalk.RunWalk` → `func_8003309C` →
+  `func_80032F10` → `func_80017684` → `func_80017390`, looping. With
+  `KF2_MODELWALK=0` all four seeds play to the end, and 1018's input stream is
+  identical up to the frame it had hung on; `KF2_MOPOSE=0` alone and
+  `KF2_STAGE13=0` alone do not help. `KF2_MODELWALK=verify` cannot catch it
+  (the recompiled walk is the one that draws there), and it reports a RAM
+  mismatch on every `func_800331B4` call in area 1 from the first frame,
+  windowed too, against the 0 the walk was verified at: 68 bytes from
+  `0x800A5014`, recompiled `00`, ours `03`. **Not diagnosed.** The warp is the
+  port's (`AreaWarp`) and lands a level 6 save in an area it would reach much
+  later, so whether a player can reach the same state is open; the crash itself
+  is in the port's code, not the game's. It has a row in the open questions of
+  [TODO.md](TODO.md). **Diagnosed 2026-10-24** (issue #79, the same fault in the
+  boss gauntlet): the game's model heap overran its end once it was packed with
+  nothing evictable, and the walk had pinned models only the mirror sees. The
+  "crash in the port's code" was the game's own data, overwritten. See "The model
+  heap overran its end" in [GAME_INTERNALS.md](GAME_INTERNALS.md). The fuzzer now
+  reports `heap-full` when `HeapGuard` has to fence it.
+- **Seed 1024 crashed in the game's own code** (`func_80017764` under
+  `func_80032CD8`, reading `0x3B2E13F4`) about 25 frames after a random `goto`
+  put the player at an area exit and `fdat08` loaded; it crashes the same with
+  `Stage13`, `ModelWalk` and `MoPose` all recompiled. `goto` places the player
+  where no path leads, so this is most likely the macro's, not a bug a player
+  meets. Turn macros off (`--no-macros`) to triage anything like it.
+- **With `--guards off`** the hangs above were at first taken for the wall
+  slide `WallGuard` fences; they come back with the guards on, and are the
+  object walk's. Neither guard's fault has been reached by the fuzzer yet.
+
 ## Compile a mod without launching the game
 
 Roslyn compiles mods at load, so a

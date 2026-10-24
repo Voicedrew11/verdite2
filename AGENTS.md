@@ -30,7 +30,7 @@ you would be doing when you need them:
 | `docs/RECOMPILATION.md` | config, overlays, function maps, SDK addresses |
 | `docs/RUNTIME.md` | interrupts, HLE, the `tools/RecompOne/patches/` stack |
 | `docs/RECOMPONE_FORK.md` | the fork `tools/RecompOne` is a subtree of, and merging from upstream |
-| `tools/RecompOne/docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0110` |
+| `tools/RecompOne/docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0111` |
 | `docs/RENDERING.md` | perspective correction, sub-pixel, Z-buffer, dither |
 | `docs/WIDESCREEN.md` | aspect ratio, the HUD, the three culls |
 | `docs/AUDIO.md` | SPU interpolation, reverb, XA resampling, the host output |
@@ -101,6 +101,7 @@ KF2_AUTOSTART=2                        # boot straight into save slot 1..3, past
 KF2_AGENT=1                            # [KF2-AGENT] state lines on stdout
 KF2_SHELL=1                            # TCP 127.0.0.1:27900 command channel
 KF2_BOOTEXE=end                        # boot straight into OPEN.EXE, GAME.EXE or END.EXE
+KF2_HEADLESS=1 KF2_TURBO=1             # no window, no audio, nothing waits; what scripts/fuzz.py runs under
 ```
 
 Prefer the mods under `mods/` (**enable them in the game's Mods panel** — mods
@@ -113,6 +114,14 @@ gigabytes a minute. `KF2_LOG=bios` is very expensive during play — the game po
 `docs/ENV_VARS.md`. The docs mention `KF2_TRACECALL` — that was an ad-hoc local
 edit to the dispatcher and is *not* in any committed patch; re-add it by hand if
 you need indirect-call tracing.
+
+**To find crashes and hangs without playing, fuzz.** `python3 scripts/fuzz.py
+--runs 48` plays six headless, turbo runs at a time from seeded pad input and
+macros (`patches/Fuzz.cs`, `KF2_FUZZ=<seed>`), checks invariants every frame, and
+writes `fuzz/report.md` grouped by stack signature, with the command that gets
+each one again; rerunning the seed reproduces better than `--replay`. It does not
+exercise the GL renderer. See "Fuzzing headless playthroughs" in
+`docs/DEVELOPMENT.md`.
 
 **For a hang, take the managed stack of the live process instead of adding
 logging.** Recompiled functions carry their MIPS address in their name, so the
@@ -223,6 +232,7 @@ what it is) live there, not here.
 | `EndingHold`, `BootExe` | hold "The End", any button returns to the title | on | RUNTIME, "The ending screen" |
 | `HitGuard` | fences the final-boss hit-path fault | on | TODO, "The crash on the final boss's last hit" |
 | `WallGuard` | replaces the wall slide `func_80028080`: if the player already stands in map collision (bit `0x2`) its retries end in a loop with no call that never exits, and stage 3 calls it every tick, so the game froze; the guard tests the spot first and nudges the player to the nearest free one | on | GAME_INTERNALS, "The wall slide never leaves a wall it starts in" |
+| `HeapGuard` | replaces the model heap's compaction `func_80017580`: with nothing evictable it wrote a free header over the heap's `0xFF` end, and the next model was loaded past it, over the HUD's static models (a crash in the HUD builder) or into a block that walks onto itself (a hang); the guard puts the end back and the allocation is refused; the fuzzer's `heap-full` | on | GAME_INTERNALS, "The model heap overran its end" |
 | `AudioQuality`, `AudioProbe` | voice interpolation and reverb (`0043`); probe and WAV dump | sinc, enhanced reverb | AUDIO, "Voice interpolation", "An enhanced reverb sized from the game's registers" |
 | `PositionalAudio` | 3D sound effects re-aimed every frame, for speakers or headphones (`0044`) | headphones | AUDIO, "Positional audio" |
 
@@ -470,7 +480,7 @@ removed for the same reason.
 standalone fork `Voicedrew11/verdite-recompone` (`main`): its sources are tracked
 here, so a fresh clone builds with nothing fetched, and an edit inside it is a
 change to this repository like any other.** `tools/RecompOne/patches/*.patch` (the fork's own, since Phase 2) are kept
-as the record of what the port changed and why, and the numbers (`0001`-`0110`)
+as the record of what the port changed and why, and the numbers (`0001`-`0111`)
 are how the source refers to each change, but they are **no longer replayed**.
 The merge base is `tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's
 history descends from upstream, so a harvest is an ordinary merge, made in a

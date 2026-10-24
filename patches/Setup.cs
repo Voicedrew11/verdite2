@@ -33,6 +33,14 @@ public static class Setup
     /// it from (a line in the log says why), <see cref="Busy"/> clears at once.</summary>
     public static void Open()
     {
+        // Headless there is no host frame to open it on, and nothing to close it:
+        // the work below would never run and the settings page would wait on Busy
+        // for good (found by the fuzzer, scripts/fuzz.py).
+        if (RecompOne.Runtime.Runtime.Headless)
+        {
+            Console.WriteLine("[KF2] setup: not opened, headless");
+            return;
+        }
         _opening = true;
         SettingsStore.OnHost(() =>
         {

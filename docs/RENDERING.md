@@ -2507,6 +2507,19 @@ it (an object's drawn bit, `+3 | 0x80`, is not set either) and the mirror replay
 with the rest. The reflection reach had let such models into the picture too, where
 only the depth test hid them.
 
+**A mirror-only model is drawn only while it is resident; it is not loaded for
+the mirror** (2026-10-24, issue #79). The walk used to mark it in the walk's two
+"wanted" bitmaps as well, so the game streamed in and kept every model the mirror
+could see. That is a bigger set than the game's own view, which the model heap is
+sized for, and in `fdat20` it filled the heap with nothing evictable and set off the
+game's own overrun ("The model heap overran its end" in
+[GAME_INTERNALS.md](GAME_INTERNALS.md)). A model the game wanted recently is still
+resident, evictable but drawable, until a compaction actually frees it, so most of
+what the mirror shows is unaffected. A model nobody near the eye has wanted is
+missing from the water. That change has been measured, not looked at.
+`KF2_MODELWALK=verify`'s RAM mismatch on every walk in area 1 (68 bytes from
+`0x800A5014`, ours `03`) was this: a load the recompiled walk never asked for.
+
 The proposal before this was to run `CullGrid`'s flood from the mirrored eye, which
 needed its flood fixed first (`docs/TODO.md` #24). That was wrong: the flood runs in
 plan from the camera's tile, which the mirror shares, so it would have given the

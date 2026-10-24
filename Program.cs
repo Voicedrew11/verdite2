@@ -10,6 +10,17 @@ using Recompiled;
 
 Verdite.Core.Game.Configure(tag: "KF2");
 
+// Runs nobody watches: no window, no GL context, no audio device (runtime 0111),
+// and a world that ticks every frame with nothing waiting (FramePacing.Turbo).
+// The fuzzer's two switches; see "Fuzzing headless playthroughs" in
+// docs/DEVELOPMENT.md.
+//
+//     KF2_HEADLESS=1     no window and no sound; the GL renderer does not run
+//     KF2_TURBO=1        as fast as the host can step the world
+//     KF2_HEADLESS_RASTER=1  headless, still rasterize polygons into VRAM (half the frame)
+RecompOne.Runtime.Runtime.Headless = Verdite.Core.Game.Env("HEADLESS")?.Trim() is "1" or "on" or "true";
+RecompOne.Runtime.Gpu.NoRaster = RecompOne.Runtime.Runtime.Headless && Verdite.Core.Game.Env("HEADLESS_RASTER")?.Trim() is not "1";
+
 // Crash, fault and hang reports carry this port's version, place and switches,
 // and KF2_FAULT makes each kind on purpose to test its path. KF2_HANG=seconds
 // without a frame before a hang report (15; 0 turns the watchdog off). See "Crash
@@ -260,6 +271,10 @@ Kf2.FramePacing.Configure(Environment.GetEnvironmentVariable("KF2_FPS"),
                           Environment.GetEnvironmentVariable("KF2_FPS_LOGIC"),
                           Environment.GetEnvironmentVariable("KF2_TICKRATE"),
                           Environment.GetEnvironmentVariable("KF2_FPS_PROBE"));
+// Turbo also turns off the three pacers below that hold a menu, a disc wait and
+// a modal loop to the wall clock; with a tick on every frame they have nothing
+// left to hold to.
+Kf2.FramePacing.ConfigureTurbo(Environment.GetEnvironmentVariable("KF2_TURBO"));
 Kf2.FramePacing.Install();
 
 // Stage 1 clears the screen tint every frame and the stages that set it are gated,
@@ -320,7 +335,7 @@ Kf2.FrameCapture.Install();
 //
 //     KF2_MENUPACING=0        leave both on the frame clock -- comparison only
 //     KF2_MENUPACING_PROBE=1  what each repeat cost, and the blink's step rate
-Kf2.MenuPacing.Configure(Environment.GetEnvironmentVariable("KF2_MENUPACING"),
+Kf2.MenuPacing.Configure(Kf2.FramePacing.Turbo ? "0" : Environment.GetEnvironmentVariable("KF2_MENUPACING"),
                          Environment.GetEnvironmentVariable("KF2_MENUPACING_PROBE"));
 Kf2.MenuPacing.Install();
 
@@ -369,7 +384,7 @@ Kf2.MessageText.Install();
 //     KF2_LOADPACING=0        leave it on the render rate -- comparison only
 //     KF2_LOADPACING_PROBE=1  the figure's steps, elapsed and rate per load, and
 //                             the blocking VSync calls the wait was made of
-Kf2.LoadPacing.Configure(Environment.GetEnvironmentVariable("KF2_LOADPACING"),
+Kf2.LoadPacing.Configure(Kf2.FramePacing.Turbo ? "0" : Environment.GetEnvironmentVariable("KF2_LOADPACING"),
                          Environment.GetEnvironmentVariable("KF2_LOADPACING_PROBE"));
 Kf2.LoadPacing.Install();
 
@@ -539,7 +554,7 @@ Kf2.FluidSmoothing.Install();
 // The redraw has to be asked for once the smoothing patches' own posts have put
 // the tables back. That is declared on the hook (Stage13.HookOrder.Redraw, 0070),
 // so where this line sits no longer matters.
-Kf2.LoopPacing.Configure(Environment.GetEnvironmentVariable("KF2_LOOPPACING"),
+Kf2.LoopPacing.Configure(Kf2.FramePacing.Turbo ? "0" : Environment.GetEnvironmentVariable("KF2_LOOPPACING"),
                          Environment.GetEnvironmentVariable("KF2_LOOPPACING_PROBE"));
 Kf2.LoopPacing.Install();
 Kf2.EndingHold.Install();
@@ -596,6 +611,16 @@ Kf2.HitGuard.Install();
 //     KF2_WALLGUARD=0     the recompiled routine alone: the hang back -- comparison only
 Kf2.WallGuard.Configure(Environment.GetEnvironmentVariable("KF2_WALLGUARD"));
 Kf2.WallGuard.Install();
+
+// The model heap's compaction, func_80017580, writes a free header over the
+// heap's 0xFF end when nothing in it can be evicted, and the next model is then
+// loaded past the end: over the HUD's models (a crash in the HUD builder) or into
+// a block that walks onto itself (a hang). The guard puts the end back. See "The
+// model heap overran its end" in docs/GAME_INTERNALS.md.
+//
+//     KF2_HEAPGUARD=0     the recompiled routine alone: the overrun back -- comparison only
+Kf2.HeapGuard.Configure(Environment.GetEnvironmentVariable("KF2_HEAPGUARD"));
+Kf2.HeapGuard.Install();
 
 // Dithering. Clearing the GPU's dither bit is one pre/post hook pair on each of
 // PutDrawEnv and DrawOTag, and it is a patch rather than a mod because it is a
@@ -1056,6 +1081,21 @@ Kf2.AutoStart.Install();
 Kf2.AgentBeacon.Configure(Environment.GetEnvironmentVariable("KF2_AGENT"));
 Kf2.AgentBeacon.Install();
 
+// Seeded random play with invariants, the playthrough fuzzer's driver; its
+// orchestrator is scripts/fuzz.py. See "Fuzzing headless playthroughs" in
+// docs/DEVELOPMENT.md.
+//
+//     KF2_FUZZ=<seed>  KF2_FUZZ_FRAMES=20000  KF2_FUZZ_STOP=1  KF2_FUZZ_GODMODE=1
+//     KF2_FUZZ_MACROS=0  KF2_FUZZ_REPLAY=<file>  KF2_FUZZ_OUT=fuzz-input.log
+Kf2.Fuzz.Configure(Environment.GetEnvironmentVariable("KF2_FUZZ"),
+                   Environment.GetEnvironmentVariable("KF2_FUZZ_FRAMES"),
+                   Environment.GetEnvironmentVariable("KF2_FUZZ_STOP"),
+                   Environment.GetEnvironmentVariable("KF2_FUZZ_GODMODE"),
+                   Environment.GetEnvironmentVariable("KF2_FUZZ_MACROS"),
+                   Environment.GetEnvironmentVariable("KF2_FUZZ_REPLAY"),
+                   Environment.GetEnvironmentVariable("KF2_FUZZ_OUT"));
+Kf2.Fuzz.Install();
+
 // The command channel -- the half that lets an agent act instead of only watch.
 // A small TCP server on loopback, off unless KF2_SHELL is set:
 //
@@ -1081,7 +1121,7 @@ Kf2.AgentServer.Install();
 //     KF2_FOCUS_PAUSE=0   keep running in the background
 //
 // See "Pausing when the window loses focus" in docs/PATCHES_AND_MODS.md.
-FocusPause.Configure(driven: new[] { "KF2_SHELL", "KF2_AUTOPAD", "KF2_AUTOSTART", "KF2_AGENT" }
+FocusPause.Configure(driven: new[] { "KF2_SHELL", "KF2_AUTOPAD", "KF2_AUTOSTART", "KF2_AGENT", "KF2_FUZZ", "KF2_FUZZ_REPLAY" }
     .Any(v => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(v))));
 FocusPause.Install();
 Kf2.FramePacing.PauseWhen(() => FocusPause.Active);

@@ -703,6 +703,7 @@ public static class ModelWalk
                 if ((c.V0 & mask) == 0u && !_mirrorOnly) continue;
             }
 
+            bool mirrorOnly = _mirrorOnly;
             Interrupts.Poll(c, mem);
             c.A0 = mem.ReadU8(rec + 1u) + 0x80u;
             c.RA = 0x80033280u;
@@ -751,7 +752,11 @@ public static class ModelWalk
             }
 
             // Bookkeeping, whether or not the model drew: the definition's two
-            // pages and the creature's own texture page are wanted this frame.
+            // pages and the creature's own model are wanted this frame. Not for a
+            // creature only the mirror sees: what is wanted is what the game loads
+            // and keeps, and the heap is sized for the game's own view. See "The
+            // model heap overran its end" in docs/GAME_INTERNALS.md.
+            if (mirrorOnly) continue;
             uint def = CreatureDefs + ((mem.ReadU8(rec + 2u) * 15u) << 3);
             mem.WriteU8(sp + 0x198u + mem.ReadU8(def + 7u), 1);
             mem.WriteU8(sp + 0x198u + mem.ReadU8(def + 8u), 1);
@@ -850,8 +855,13 @@ public static class ModelWalk
 
         Interrupts.Poll(c, mem);
         uint model = mem.ReadU16(rec + 0x6u);
-        mem.WriteU8(sp + 0x58u + model, 1);
-        mem.WriteU8(sp + 0x198u + mem.ReadU8(ObjectDefs + model * 24u + 2u), 1);
+        // Wanted this frame, so loaded and kept -- unless only the mirror sees it,
+        // which draws it only while it is resident (see the creatures').
+        if (!_mirrorOnly)
+        {
+            mem.WriteU8(sp + 0x58u + model, 1);
+            mem.WriteU8(sp + 0x198u + mem.ReadU8(ObjectDefs + model * 24u + 2u), 1);
+        }
 
         c.A0 = model + 0x100u;
         c.RA = 0x8003380Cu;
