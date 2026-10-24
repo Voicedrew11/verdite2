@@ -594,7 +594,7 @@ public static class GpuWorld
                           $"{(d == 0 ? 0 : (double)pp / d):F1} instance(s) blended from an MO pose, {(d == 0 ? 0 : (double)pr / d):F1} from a rigid model's vertices, " +
                           $"{(d == 0 ? 0 : (double)pd / d):F1} pose(s) left undecoded, {(d == 0 ? 0 : (double)pm / d):F1} decoded after all; " +
                           $"{pt} texel(s) uploaded; store {RetainedScene.PoseTexels} texel(s), {MoPose.PoseBuilds} pose(s) and {MoPose.RigidBuilds} rigid model(s) kept, " +
-                          $"{MoPose.PoseRefused} pose(s) refused in all" +
+                          $"{MoPose.PoseRefused} pose(s) refused, {MoPose.Unread} stale decode(s) skipped, {MoPose.Fenced} stream(s) fenced in all" +
                           (MoPose.Checking ? $"; checked {MoPose.CheckVertices} vert(ices), {MoPose.CheckDiffer} placed differently" : ""));
         long bn = RetainedScene.BlendNoted - _bNoted, bs = RetainedScene.BlendSorted - _bSorted;
         long bd = RetainedScene.BlendDrawn - _bDrawn, br = RetainedScene.BlendRuns - _bRuns;

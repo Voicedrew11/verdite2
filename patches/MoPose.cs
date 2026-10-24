@@ -101,6 +101,10 @@ public static class MoPose
     /// <summary>Calls, calls deferred, and deferred poses decoded into RAM after all; never reset.</summary>
     public static long Calls, Deferred, Materialized;
 
+    /// <summary>Materializes asked by a submit that does not read the posed buffer, and
+    /// decodes refused for a stream that leaves it; never reset.</summary>
+    public static long Unread, Fenced;
+
     /// <summary>Calls that let a record go for a rigid bank, set a record up, and rebuilt
     /// its keyframe; never reset.</summary>
     public static long Rigid, Inits, Rebuilds;
@@ -242,7 +246,7 @@ public static class MoPose
         else
         {
             Copy(c, mem, _key, Posed, count);
-            Decode(c, mem, Posed, _stream, _weight);
+            Decode(c, mem, Posed, _stream, _weight, _count);
         }
         mem.WriteU32(VertexBase, Posed);
         mem.WriteU16(rec, 2);
@@ -261,17 +265,23 @@ public static class MoPose
         f(c, mem);
     }
 
-    /// <summary>The deferred pose into RAM, as the blender would have left it. With
-    /// <paramref name="check"/> (<see cref="Checking"/>) it stays pending, so the check
-    /// leaves the run it checks as it found it: the next submit sees the pending pose
-    /// it would have seen without the check.</summary>
+    /// <summary>The deferred pose into RAM, as the blender would have left it, for a
+    /// submit that reads the posed buffer: the vertex base still names it. A rigid
+    /// submit points the base at its own vertices without calling the blender, so the
+    /// pose still pending at it may be an earlier walk's, its stream in a heap block
+    /// since compacted or reloaded; decoded, a garbage count ran over all of RAM. Left
+    /// pending there, as the submit does not read it. With <paramref name="check"/>
+    /// (<see cref="Checking"/>) it stays pending, so the check leaves the run it checks
+    /// as it found it: the next submit sees the pending pose it would have seen without
+    /// the check. See "A rigid submit decoded a stale pose" in docs/GPU_RENDERER.md.</summary>
     public static void Materialize(CpuContext? c, PSMemory mem, bool check = false)
     {
         if (!Pending) return;
+        if (mem.ReadU32(VertexBase) != Posed) { Unread++; return; }
         Pending = check;
         Materialized++;
         Copy(c, mem, _key, Posed, _count);
-        Decode(c, mem, Posed, _stream, _weight);
+        Decode(c, mem, Posed, _stream, _weight, _count);
     }
 
     /// <summary>The blender's copy: a vertex count taken in sixteen bits, 0 being 65536.</summary>
@@ -292,20 +302,20 @@ public static class MoPose
     /// (<c>ScaleMatrix</c>, each element times the weight, shifted 12, in 16 bits) before
     /// adding; the three are consecutive vertices, each read only for its own delta, so
     /// adding each at once is the same arithmetic.
+    ///
+    /// A stream that is not a pose is refused rather than followed: a negative count
+    /// (the routine would run it round 32 bits, writing every eighth word to the end of
+    /// RAM) or an entry outside the <paramref name="count"/> vertices the copy filled.
+    /// No pose of the game's has done either (<see cref="Fenced"/>).
     /// </summary>
-    static void Decode(CpuContext? c, PSMemory mem, uint dst, uint stream, uint weight)
+    static void Decode(CpuContext? c, PSMemory mem, uint dst, uint stream, uint weight, uint count)
     {
         int n = (short)mem.ReadU16(stream);
-        if (n < 0 && c != null)
-        {
-            // Never seen; the routine's own loop would run the count round 32 bits.
-            c.A0 = dst; c.A1 = stream; c.A2 = weight; c.RA = 0x80035030u;
-            KingsField2.func_80034A74(c, mem);
-            return;
-        }
+        if (n < 0) { Fence(stream, n); return; }
         if (c != null) Interrupts.Poll(c, mem);
         stream += 2u;
         uint at = dst;
+        uint end = dst + (((count & 0xFFFFu) == 0u ? 0x10000u : count & 0xFFFFu) << 3);
         for (; n > 0; n--)
         {
             ushort x = mem.ReadU16(stream);
@@ -315,6 +325,7 @@ public static class MoPose
                 stream += 4u;
                 continue;
             }
+            if (at < dst || at >= end) { Fence(stream, n); return; }
             ushort y = mem.ReadU16(stream + 2u), z = mem.ReadU16(stream + 4u);
             stream += 6u;
             ushort px = mem.ReadU16(at), py = mem.ReadU16(at + 2u), pz = mem.ReadU16(at + 4u);
@@ -323,6 +334,11 @@ public static class MoPose
             mem.WriteU16(at + 4u, (ushort)(pz + Scale((short)(z - pz), weight)));
             at += 8u;
         }
+    }
+
+    static void Fence(uint stream, int n)
+    {
+        if (Fenced++ < 8) Console.WriteLine($"[KF2] mo pose: refused a stream at 0x{stream:X8} ({n} entries left) that leaves the posed buffer");
     }
 
     /// <summary>One ScaleMatrix element: the low word of the product, shifted 12.</summary>

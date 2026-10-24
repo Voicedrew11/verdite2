@@ -1035,6 +1035,47 @@ Found and fixed on `main` (20 Hz), then on `v0.5.0-staging` at 15 Hz: there, bef
 itself after the fix. The pictures compare equal to the copy path, which is the game's
 own pose.
 
+**A rigid submit decoded a stale pose.** Reported 2026-10-24 from a player's
+crash reports (0.5.1, Windows): three crashes in area 4 (`fdat14`), each
+`unmapped address: 0x808xxxxx` in `func_80034A74`, under `WalkEffects → RunSubmit →
+MoPose.Materialize`. The agent beacon read nonsense (hp 65503, area 245), and the
+RAM dumps show why. From the posed buffer `0x80190AD8` up, every 8-byte group has
+its first six bytes rewritten and its last two kept. That is SVECTOR writes, the
+decoder's. The C# `Decode` hands a stream to the recompiled routine only when its
+count is negative, and that routine then runs the count round 32 bits: it wrote every
+eighth word to the end of RAM and faulted past it.
+
+So `Materialize` decoded a stream that was not a pose. It decoded whatever pose was
+pending, at any submit not drawn whole. A pose stays pending past the submit that
+deferred it. A rigid submit (an effect, an object; clip byte `>= 0x80`) does not call
+the blender, so nothing ends it there, and it points the vertex base `0x8018EAA0` at
+its own vertices. Decoding there served nobody, since that submit does not read the
+posed buffer. And the pose could be an earlier one. The model loader runs between the
+walk's tables and between frames, and its compaction slides blocks. So `_stream`,
+`s3` plus an offset taken at the blend, can name a block since moved, evicted or
+reloaded.
+
+Fixed twice over:
+
+- `Materialize` decodes only when the vertex base still names the posed buffer,
+  which is the submit that reads it (`MoPose.Unread` counts the others).
+- `Decode` refuses a stream instead of following it: on a negative count it no
+  longer calls the recompiled routine, and it stops at an entry outside the
+  `count` vertices the copy filled (`MoPose.Fenced`, logged as
+  `[KF2] mo pose: refused a stream`). Both counters are on the
+  `KF2_GPUWORLD_PROBE=1` poses line.
+
+**Measured:** windowed runs through areas 0, 1, 4, 2 and 5 (`warp`), and 3 minutes
+casting and attacking in area 4 with `KF2_DEBUG_GODMODE=1`: 0 unread, 0 fenced.
+`KF2_MOPOSE=verify` in areas 1 and 4 shows the same counts with the fix as without
+it. The burst of mismatches in the first seconds of area 4 is there on both
+builds: the area is still streaming, and a disc read that lands during the
+recompiled run is not replayed for ours. Fuzz: 24 runs, 0 findings, although the
+fuzzer never defers a pose, because headless has no GPU world. **Not reproduced:** the
+player's crash itself. The stale pose is the one path to a non-pose stream that
+the port added, but play here never produced a rigid submit with a pose pending.
+The fence makes the crash and the corruption impossible whatever the source.
+
 #### Step 3, the fourth slice
 
 **The first-person arm drawn by the renderer, from its mesh and its pose in the store,

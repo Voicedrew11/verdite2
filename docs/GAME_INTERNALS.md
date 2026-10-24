@@ -2286,6 +2286,16 @@ menu's frame head and presenter, and returns after `PadRead` reports any button,
 unloading through `func_800177F8`. There is no CD callback in the path that was
 found: the picture was loaded and shown with no wait for a read, unlike KF3's viewer.
 
+**The viewer presents nothing while it waits.** After its two fields it spins on
+`PadRead(1)` and draws no frame, so the hang watchdog (`0107`; it counts presented
+frames) wrote a report whenever a map stayed up for 15 s. One player sent 11 of these
+from 0.5.1, all with the same stack: `func_80018E80 → func_80019204 →
+func_80019B54 → PadRead`. Their uptimes kept rising within a session, so the game
+had carried on each time. `MapKey` now replaces the viewer with itself run under
+`Watchdog.Paused`, for the ITEM page and the key alike, and attaches it with the key
+off too. Measured: with `KF2_HANG=5`, a map kept open for 14 s (`KF2_MAPKEY_TEST`,
+`KF2_MAPKEY_CLOSE`) wrote no report.
+
 **The wrapping.** `MapKey` calls the menu's enter `func_80022754` first (it saves the
 world's descriptors and grabs the displayed frame), then `func_80022D80`, the viewer,
 `func_80022DC4(0x12)` and the menu's leave `func_800228C8`, so `MenuWorld` draws the
