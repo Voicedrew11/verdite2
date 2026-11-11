@@ -386,9 +386,11 @@ Kf2.Retranslation.Retranslation.Install();
 //     KF2_JP_DISC=path        the Japanese .cue or .chd; else beside the US disc
 //     KF2_JP_PROBE=1          each file's plan, served sectors, labels with no Japanese
 //     KF2_JP_DRYRUN=1         build the plan and the menu's words, log them, exit
+//     KF2_JP_BUTTONS=0        keep the US pad buttons (the Japanese run swaps ○ and ×)
 Kf2.Japanese.JapaneseDisc.Install();
 Kf2.Japanese.JapaneseMenu.Install();
 Kf2.Japanese.JapaneseMovies.Install();
+Kf2.Japanese.JapaneseButtons.Install();
 
 // The loading screen's walking figure is the same bug in a third place, and the
 // shared cause is that the game counts time in VSync(0) calls while a VSync(0)

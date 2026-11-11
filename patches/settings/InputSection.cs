@@ -212,6 +212,10 @@ public sealed class InputSection : ISettingsSection
 
         BindingTable.Draw(gamepad: true, ref _padRow, ref _padAdd, ActionColumn, BindingActions);
         ActionNote();
+        if (Kf2.Japanese.JapaneseButtons.On)
+            PatchSettings.Note("The game is in Japanese, so the pad's Cross and Circle trade places, as on " +
+                               "the Japanese release: Circle uses and confirms, Cross opens the menu and " +
+                               "cancels. The keyboard and the mouse are unchanged.");
 
         ImGui.Spacing();
 

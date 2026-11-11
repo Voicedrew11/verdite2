@@ -41,6 +41,7 @@ KF2_LANGUAGE=ja                        # play in Japanese from the player's Japa
 KF2_JP_DISC=path.cue                   # the Japanese disc to use (.cue or .chd); otherwise the launcher's saved one, then the US disc's folder, its "Japanese discs" and "japanese" subfolders
 KF2_JP_PROBE=1                         # each file's plan and a served-sector count every 5 s; each label with no Japanese the first time it is drawn; each card message built; a count of labels drawn in Japanese and in English
 KF2_JP_DRYRUN=1                        # mix the disc, map every menu label, print it all and exit: 0 if everything resolved, 1 if not
+KF2_JP_BUTTONS=0                       # a Japanese run keeps the US pad buttons; by default its ○ and × trade places (JAPANESE, "The pad's ○ and ×")
 KF2_MENUWORLD=0                        # a menu, shop, sign or dialogue pastes the frozen 320-wide frame again (the world is drawn live by default)
 KF2_MENUWORLD_PROBE=1                  # world passes a second, primitive bytes used, overflows, sessions refused; a line per message fade: its step draws, VSyncs and ms, apart from frames held for the button
 KF2_MESSAGE_FADE=2                     # 1-4: vblanks each step of a sign's or message's fade is shown for, where MenuWorld draws it; 1 is the game's own. Gameplay > Message fade length, kept as kf2.messagefade; the variable wins

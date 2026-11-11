@@ -17,6 +17,7 @@ hashes, and every word and picture is read from the player's own discs at run ti
 | `patches/japanese/JapaneseProgram.cs` | the two Japanese programs: the Best one the tables are written in, and where the 1995 one has each address |
 | `patches/japanese/JapaneseFontAtlas.cs` | the Japanese glyphs cached in the US label font page |
 | `patches/japanese/JapaneseMovies.cs`, `MovieMusic.cs` | the title, the two movies, their music (from the Japanese Disc mod) |
+| `patches/japanese/JapaneseButtons.cs` | the pad's ○ and × the Japanese release's way round |
 | `tools/verdite-core/src/Language/` | shared with Verdite3: `MixedDiscImage`, `DiscFinder`, `DiscArchive`, `ExeInterpreter` (the MIPS constant reader), `LanguageChoice` |
 | `Verdite2.Launcher/LanguageStep.cs` | the first-run question, ported from Verdite3 |
 
@@ -236,9 +237,37 @@ Japanese frame, and plays the opening's and ending's libsnd sequences onto the S
 cards in English is not taken: a Japanese run keeps the Japanese cards. With the mod
 enabled, the built-in title and music stand down.
 
+## The pad's ○ and ×
+
+The two releases put confirm and the menu on opposite buttons. The US GAME.EXE reads
+every button through the action-mask table at `0x8006E568` (GAME_INTERNALS, "The
+action-mask table"): entry 0, Cross (`0x40` in the game's byte order), confirms and
+uses; entry 1, Circle (`0x20`), opens the in-game menu and cancels. The Japanese
+GAME.EXE (the 1995 program, read statically) has no such table and tests the bits in
+place, the other way round:
+
+- the in-game menu opens on a just-pressed `0x40`, Cross: `0x800290A4` tests
+  `pad & 0x00400040 == 0x40` ahead of the one call to the menu (`0x8001876C`), the
+  shape of the US `func_80029CBC`'s test of entry 1;
+- the option-list cursor at `0x8001E3C8` steps on Up/Down, confirms on `0x20`, Circle
+  (sound `0x11`, the confirmed flag set), and cancels on `0x40`, Cross (sound `0x12`).
+
+So a Japanese run swaps the pad's Cross and Circle (`JapaneseButtons`): ○ uses, opens
+and confirms, × opens the menu and cancels. It is done to the physical pad's two bits as
+the runtime polls it (`HostWindow.PadButtons`, RecompOne `0112`), not to the game's
+table and not to the bindings, because everything else that presses a button means the
+US one: the keyboard (F uses, Tab and Escape open the menu), the mouse, auto start, the
+shortcuts, the menu pointer. Nothing is written to settings, and English runs are not
+touched. The Gamepad tab under Input says so in a note. `KF2_JP_BUTTONS=0` keeps the US
+buttons, a comparison.
+
+Measured: the build, and a headless Japanese run with `KF2_AUTOSTART=2` reaching
+fdat05, which shows the port's own Cross presses still mean the US Cross. **Not tried on
+a pad**: a person has to press ○ and × in a Japanese run.
+
 ## Switches and checks
 
-- `KF2_LANGUAGE`, `KF2_JP_DISC`, `KF2_JP_PROBE`, `KF2_JP_DRYRUN`: `docs/ENV_VARS.md`.
+- `KF2_LANGUAGE`, `KF2_JP_DISC`, `KF2_JP_PROBE`, `KF2_JP_DRYRUN`, `KF2_JP_BUTTONS`: `docs/ENV_VARS.md`.
 - Dry run: `KF2_LANGUAGE=ja KF2_JP_DRYRUN=1 dotnet bin/Release/net10.0/KingsField2.dll disc/KingsField2.cue`.
   Exits 0 after one line per file, the menu map, and every resolved site.
 

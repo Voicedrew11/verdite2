@@ -30,7 +30,7 @@ you would be doing when you need them:
 | `docs/RECOMPILATION.md` | config, overlays, function maps, SDK addresses |
 | `docs/RUNTIME.md` | interrupts, HLE, the `tools/RecompOne/patches/` stack |
 | `docs/RECOMPONE_FORK.md` | the fork `tools/RecompOne` is a subtree of, and merging from upstream |
-| `tools/RecompOne/docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0111` |
+| `tools/RecompOne/docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0112` |
 | `docs/RENDERING.md` | perspective correction, sub-pixel, Z-buffer, dither |
 | `docs/WIDESCREEN.md` | aspect ratio, the HUD, the three culls |
 | `docs/AUDIO.md` | SPU interpolation, reverb, XA resampling, the host output |
@@ -239,7 +239,7 @@ what it is) live there, not here.
 | `HeapGuard` | replaces the model heap's compaction `func_80017580`: with nothing evictable it wrote a free header over the heap's `0xFF` end, and the next model was loaded past it, over the HUD's static models (a crash in the HUD builder) or into a block that walks onto itself (a hang); the guard puts the end back and the allocation is refused; the fuzzer's `heap-full` | on | GAME_INTERNALS, "The model heap overran its end" |
 | `AudioQuality`, `AudioProbe` | voice interpolation and reverb (`0043`); probe and WAV dump | sinc, enhanced reverb | AUDIO, "Voice interpolation", "An enhanced reverb sized from the game's registers" |
 | `PositionalAudio` | 3D sound effects re-aimed every frame, for speakers or headphones (`0044`) | headphones | AUDIO, "Positional audio" |
-| `JapaneseDisc`, `JapaneseMenu`, `JapaneseMovies` (`patches/japanese/`) | Japanese from the player's own Japanese disc (SLPS-00069 or SLPS-91003), laid over the US disc in memory through `DiscImage.Decorate` (Verdite Core's `MixedDiscImage`): TALK.T's and ITEM.T's TIM entries and FDAT 47's messages-in-play block served from it, gameplay data and code kept US; the menu's labels drawn from the Japanese GAME.EXE's records (read with Verdite Core's `ExeInterpreter`; the Best and 1995 programs, by hash, `JapaneseProgram` carrying the tables' addresses to the 1995 one's) in glyphs cached in the US label page; card messages rebuilt into `PrimBuffer.TextScratch`; the Japanese title and movies with their music (from the Japanese Disc mod); `KF2_LANGUAGE`, PORT SETTINGS ▸ GAMEPLAY ▸ LANGUAGE, the launcher's language step; `KF2_JP_DRYRUN=1` the check | off; English (measured, not judged) | JAPANESE |
+| `JapaneseDisc`, `JapaneseMenu`, `JapaneseMovies` (`patches/japanese/`) | Japanese from the player's own Japanese disc (SLPS-00069 or SLPS-91003), laid over the US disc in memory through `DiscImage.Decorate` (Verdite Core's `MixedDiscImage`): TALK.T's and ITEM.T's TIM entries and FDAT 47's messages-in-play block served from it, gameplay data and code kept US; the menu's labels drawn from the Japanese GAME.EXE's records (read with Verdite Core's `ExeInterpreter`; the Best and 1995 programs, by hash, `JapaneseProgram` carrying the tables' addresses to the 1995 one's) in glyphs cached in the US label page; card messages rebuilt into `PrimBuffer.TextScratch`; the Japanese title and movies with their music (from the Japanese Disc mod); `KF2_LANGUAGE`, PORT SETTINGS ▸ GAMEPLAY ▸ LANGUAGE, the launcher's language step; the pad's ○ and × swapped the Japanese release's way (`JapaneseButtons`, RecompOne `0112`; `KF2_JP_BUTTONS=0`); `KF2_JP_DRYRUN=1` the check | off; English (measured, not judged) | JAPANESE |
 
 Features ship **off** when the mechanism is measured but the picture has never been
 judged by eye; say which of the two a change has when you write it up.
@@ -485,7 +485,7 @@ removed for the same reason.
 standalone fork `Voicedrew11/verdite-recompone` (`main`): its sources are tracked
 here, so a fresh clone builds with nothing fetched, and an edit inside it is a
 change to this repository like any other.** `tools/RecompOne/patches/*.patch` (the fork's own, since Phase 2) are kept
-as the record of what the port changed and why, and the numbers (`0001`-`0111`)
+as the record of what the port changed and why, and the numbers (`0001`-`0112`)
 are how the source refers to each change, but they are **no longer replayed**.
 The merge base is `tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's
 history descends from upstream, so a harvest is an ordinary merge, made in a
