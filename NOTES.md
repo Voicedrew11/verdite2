@@ -340,6 +340,7 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - Auto reload
 - Comparing gear on the equip prompt
 - Cursor memory
+- Shortcuts
 - NPC dialogue
 - Enemies turn faster
 - A dynamic map

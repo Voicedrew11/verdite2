@@ -308,6 +308,12 @@ public static class PortSettings
         tip: "The Items and Magic pages open on what you last highlighted, and the equipment menus on what is equipped.",
         usable: () => !CursorMemory.StoodDown);
 
+    /// <summary>Five Select shortcuts. Their keys, buttons and labels stay in the Settings window.</summary>
+    public static readonly PortSetting ShortcutsOn = Switch(Shortcuts.Shortcuts.OnKey, "KF2_SHORTCUTS", "Shortcuts",
+        ControlsPage, "SHORTCUTS", () => Shortcuts.Shortcuts.Enabled, v => Shortcuts.Shortcuts.Enabled = v, false,
+        tip: "Five Select shortcuts, on keys 1-5 or Select and the d-pad, each holding an item or a spell. Assign them from Equipment.",
+        usable: () => !Shortcuts.Shortcuts.StoodDown);
+
     /// <summary>NPC conversations as King's Field III's: Interact goes to the next line.
     /// Its two refinements stay in the Settings window.</summary>
     public static readonly PortSetting NpcDialogueOn = Switch(NpcDialogue.OnKey, "KF2_NPCDIALOGUE", "NPC dialogue",
@@ -522,7 +528,7 @@ public static class PortSettings
         TextureFilter, PerPixel, AmbientOcclusionRow, ShadingRow,
         RenderDist, FogMode, Water,
         Language, Font, AutoReloadOn, GearCompareOn, CursorMemoryOn, NpcDialogueOn, EnemyTurnSpeed,
-        ControlsRow, InvertedCamera, StickSens, MouseSens, Gyro, RumbleRow,
+        ControlsRow, InvertedCamera, StickSens, MouseSens, Gyro, RumbleRow, ShortcutsOn,
         Positional,
     ];
 
@@ -533,7 +539,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRate, Smoothing,
         Mipmaps, Anisotropy, PerPixel, Ao, AoQuality, NoDitherOn, TrueColorOn,
         RenderDist, FogMode, MurkyWater, WaterWaves, Planar,
-        Language, Font, AutoReloadOn, GearCompareOn, CursorMemoryOn, NpcDialogueOn, EnemyTurnSpeed, FocusPauseOn,
+        Language, Font, AutoReloadOn, GearCompareOn, CursorMemoryOn, ShortcutsOn, NpcDialogueOn, EnemyTurnSpeed, FocusPauseOn,
         Controls, StickAccel, InvertedCamera, StickTurn, StickLook, MouseTurn, MouseLookSens, ItemTurnOn, ItemTurnGyro, GyroAimOn, RumbleOn, RumbleHd,
         Positional,
     ];

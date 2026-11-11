@@ -18,6 +18,7 @@ tools/RecompOne/RecompOne.Recompiler/AutoConfigure/signatures/psyq.json
 # Written by the runtime at play time: memory card saves and host settings.
 *.sav
 *.sav.bak
+shortcuts_slot*.txt
 # 0106: a damaged card, settings.json or interface.ini kept aside, and a write in flight.
 *.damaged-*
 /*.tmp

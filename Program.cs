@@ -1275,6 +1275,18 @@ Kf2.CursorMemory.Configure(Environment.GetEnvironmentVariable("KF2_CURSORMEMORY"
                            Environment.GetEnvironmentVariable("KF2_CURSORMEMORY_PROBE"));
 Kf2.CursorMemory.Install();
 
+// The game's Select shortcut, five times over: keys 1-5 (or Select and the d-pad),
+// each holding an item or a spell, assigned from Equipment's Select row and used
+// through the game's own Select code. From verdite2-mods' mods/shortcuts, which it
+// stands down for. Off by default; Gameplay > Shortcuts, PORT SETTINGS > GAMEPLAY >
+// SHORTCUTS.
+//
+//     KF2_SHORTCUTS=0|1       off or on for the run
+//     KF2_SHORTCUTS_PROBE=1   a line for each assignment, shortcut fired and card load
+Kf2.Shortcuts.Shortcuts.Configure(Environment.GetEnvironmentVariable("KF2_SHORTCUTS"),
+                                  Environment.GetEnvironmentVariable("KF2_SHORTCUTS_PROBE"));
+Kf2.Shortcuts.Shortcuts.Install();
+
 // NPC conversations as King's Field III's: while an NPC's line is up, Interact
 // talks to them again at once (the next line) and Cancel ends it; shops and the
 // fortune teller are left alone. From verdite2-mods' mods/npc-dialogue, which it

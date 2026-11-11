@@ -252,6 +252,7 @@ public static class PatchSettings
         Register("gameplay", new AutoReloadPage());
         Register("gameplay", new GearComparePage());
         Register("gameplay", new CursorMemoryPage());
+        Register("gameplay", new ShortcutsPage());
         Register("gameplay", new NpcDialoguePage());
         Register("gameplay", new ItemTurnPage());
         Register("gameplay", new MessageFadePage());
@@ -445,6 +446,12 @@ public static class PatchSettings
     public static void Set(string key, float value)
     {
         Rt.View.SetFloat(key, value);
+        Rt.SaveView();
+    }
+
+    public static void Set(string key, string value)
+    {
+        Rt.View.SetString(key, value);
         Rt.SaveView();
     }
 
