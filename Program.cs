@@ -370,6 +370,13 @@ Kf2.Text.Lettering.Configure(Environment.GetEnvironmentVariable("KF2_TEXT"),
                              Environment.GetEnvironmentVariable("KF2_FONT"));
 Kf2.Text.Lettering.Install();
 
+// The Retranslation: a new English translation from the Japanese release, drawn by the
+// lettering above (PORT SETTINGS > GAMEPLAY > TRANSLATION). See "The Retranslation" in
+// docs/PATCHES_AND_MODS.md.
+//     KF2_RETRANSLATION=0|1    the TRANSLATION row for this run
+Kf2.Retranslation.Retranslation.Configure(Environment.GetEnvironmentVariable("KF2_RETRANSLATION"));
+Kf2.Retranslation.Retranslation.Install();
+
 // The Japanese language: the Japanese King's Field II's pictures, messages and menu
 // words laid over the US disc from the player's own Japanese disc (SLPS-00069 or
 // SLPS-91003), the US program and gameplay data kept. English unless chosen.

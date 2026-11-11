@@ -3617,6 +3617,56 @@ four-line wording; with the Text mod enabled too, this stood down.
 from the shell). **The picture was judged on the mod, not on this port of it**; the gear
 comparison's new lettering has not been looked at.
 
+## The Retranslation
+
+**Off by default; a player's choice** (PORT SETTINGS ▸ GAMEPLAY ▸ TRANSLATION, ORIGINAL
+or NEW, live; the *Translation* section of Video ▸ Text; `kf2.retranslation.on`;
+`KF2_RETRANSLATION=0|1`). Brought in from the Retranslation mod (`kf2.retranslation`) of
+PerdueEgg's verdite2-mods (https://github.com/PerdueEgg/verdite2-mods, `mods/retranslation`,
+at `12df02b`), 2026-11-11, at the user's request: a new English translation made from the
+Japanese release, for every sign, dialogue line, description and place card, the menus,
+item, equipment and magic names, the labels the game builds in code, and the messages in
+play. `patches/retranslation/`, entry `Retranslation`. It carries only text; all of the
+lettering is the section above's.
+
+| file | what |
+|---|---|
+| `Script.cs` | the tables, the mod's `Text.cs` with the class renamed (`Text` would hide the `Kf2.Text` namespace) and its Movies table left out |
+| `MenuStrings.cs` | the mod's `Strings.cs`: 202 GAME.EXE menu slots rewritten in RAM and put back, and the code-built labels (SLASH, YES, ...) rewritten only for their draw |
+| `Workbook.cs` | the Mod EN column of `KF2_retranslation.ods` read from the data directory's `retranslation/` (beside `fonts/`), at start and on Import |
+| `Retranslation.cs` | the choice, the three parts, and `Follow`, which puts in place what is wanted on the game thread |
+
+What changed on the way in:
+
+- **No hooks of its own.** The mod hooked a pre and a post on the label routine
+  `func_80021E10` and a post on the main loop. `Lettering` already owns the replace on the
+  first and a post on the second, so it calls `Retranslation.BeforeLabel`/`AfterLabel`
+  around its label draw (the post in a `finally`, so the pair always closes) and
+  `Retranslation.Follow` from its main-loop post. It calls `Pictures`, `MenuCells` and the
+  string table directly rather than through the `kf2.text` slot.
+- **Switched on the game thread only.** The mod's settings set pictures and strings from
+  the host thread. Here the row and the window set `On` and the part switches; `Follow`
+  (from both of Lettering's hooks, so PORT SETTINGS, which is a menu with no main loop,
+  takes effect at once) applies the difference, and an Import hands its tables over for it
+  to install.
+- **When it applies.** NEW, the port's lettering drawing (FONT MODERN), an English run,
+  and the Retranslation mod not enabled; otherwise the game's text is put back. The row is
+  dimmed while it cannot apply. A Japanese run keeps the Japanese disc's own text.
+- **The movies are not taken**: the mod's Movies table fed the Japanese Disc mod's
+  re-lettering of the movie cards, which the port does not take ("The title and the
+  movies" in JAPANESE.md).
+- **The workbook is not shipped.** The built-in text is the workbook's as of `12df02b`;
+  `Script.cs` is rebuilt from a newer one with verdite2-mods' `tools/build_text_cs.py`,
+  renaming its class and namespace.
+
+Measured (2026-11-11, headless, `KF2_AUTOSTART=2 KF2_TEXT_PROBE=1 KF2_TEXT_TEST=3:0`):
+with NEW, `(3, 0)` is redrawn as 4 lines (the Retranslation's wording), with ORIGINAL as 5
+(the US text). Over the shell's settings session, stepping TRANSLATION to NEW and saving
+wrote the 202 menu strings in lower case in play, and back to ORIGINAL put them back, no
+exception. `scripts/fuzz.py --runs 12` with `KF2_RETRANSLATION=1`: 240,000 frames, no findings.
+**Not looked at:** the menus, the code-built labels and the messages in play in the new
+text; the wording itself was the mod's, judged there.
+
 ## Pausing when the window loses focus
 
 Click away from the window and the game stands still and goes quiet, as a desktop

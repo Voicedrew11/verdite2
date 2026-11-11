@@ -342,6 +342,20 @@ public static class PortSettings
         Usable = () => Text.Lettering.Enabled && !Text.Lettering.StoodDown,
     };
 
+    /// <summary>The Retranslation (<see cref="Retranslation.Retranslation.On"/>), live: a new
+    /// English translation made from the Japanese release. Dimmed in a Japanese run, with
+    /// the lettering off or CLASSIC, or with the Retranslation mod enabled.</summary>
+    public static readonly PortSetting Translation = new()
+    {
+        Key = Retranslation.Retranslation.OnKey, Envs = ["KF2_RETRANSLATION"], Label = "Translation",
+        Tip = "Original: the US release's English.\n" +
+              "New: a new English translation made from the Japanese release, for signs, dialogue, descriptions, menus and names. Needs the Modern font.",
+        Page = Gameplay, MenuLabel = "TRANSLATION", Steps = [0, 1], MenuValue = Named([0, 1], "ORIGINAL", "NEW"),
+        Names = ["Original", "New"], Default = 0, Live = () => Retranslation.Retranslation.On ? 1 : 0,
+        Apply = v => Retranslation.Retranslation.On = v >= 0.5, Stored = Stored.Int, Ui = Ui.None,
+        Usable = () => Retranslation.Retranslation.Usable && Text.Lettering.Modern,
+    };
+
     /// <summary>Verdite Core's pause while the window is in the background; the
     /// Settings window's Gameplay tab only.</summary>
     public static readonly PortSetting FocusPauseOn = Switch(FocusPause.OnKey, "KF2_FOCUS_PAUSE", "Pause in the background",
@@ -485,7 +499,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRateRow,
         TextureFilter, PerPixel, AmbientOcclusionRow, ShadingRow,
         RenderDist, FogMode, Water,
-        Language, Font, AutoReloadOn, GearCompareOn, EnemyTurnSpeed,
+        Language, Font, Translation, AutoReloadOn, GearCompareOn, EnemyTurnSpeed,
         ControlsRow, InvertedCamera, StickSens, MouseSens, Gyro, RumbleRow,
         Positional,
     ];
@@ -497,7 +511,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRate, Smoothing,
         Mipmaps, Anisotropy, PerPixel, Ao, AoQuality, NoDitherOn, TrueColorOn,
         RenderDist, FogMode, MurkyWater, WaterWaves, Planar,
-        Language, Font, AutoReloadOn, GearCompareOn, EnemyTurnSpeed, FocusPauseOn,
+        Language, Font, Translation, AutoReloadOn, GearCompareOn, EnemyTurnSpeed, FocusPauseOn,
         Controls, StickAccel, InvertedCamera, StickTurn, StickLook, MouseTurn, MouseLookSens, ItemTurnOn, ItemTurnGyro, GyroAimOn, RumbleOn, RumbleHd,
         Positional,
     ];

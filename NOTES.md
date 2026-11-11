@@ -335,6 +335,7 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - Menus draw the world live
 - Messages draw the world live
 - The game's text in new fonts
+- The Retranslation
 - Pausing when the window loses focus
 - Auto reload
 - Comparing gear on the equip prompt

@@ -229,8 +229,13 @@ public static class Lettering
         if (StoodDown) { orig(c, m); return; }
         FollowFont(c, m);
         if (Japanese.JapaneseMenu.TryDraw(c, m)) return;
-        if (!_modernApplied) { orig(c, m); return; }
-        MenuLabels.Draw(orig, c, m);
+        Retranslation.Retranslation.BeforeLabel(m, c.A1);
+        try
+        {
+            if (!_modernApplied) orig(c, m);
+            else MenuLabels.Draw(orig, c, m);
+        }
+        finally { Retranslation.Retranslation.AfterLabel(m); }
     }
 
     public static void BeforeLink(CpuContext c, IMemory m)
@@ -280,6 +285,8 @@ public static class Lettering
         FollowFont(c, m);
         try { MenuCells.UploadOnce(c, m); }
         catch (Exception e) { Console.WriteLine($"[KF2] text: font: {e.Message}"); }
+        try { Retranslation.Retranslation.Follow(m); }
+        catch (Exception e) { Console.WriteLine($"[KF2] retranslation: {e.Message}"); }
         if (!Japanese.JapaneseDisc.Active)
         {
             try { HudMessages.UploadOnce(c, m); }
@@ -337,7 +344,9 @@ public static class Lettering
         lock (_stringsLock) return _strings.TryGetValue(key, out var v) ? v : null;
     }
 
-    static void SetString(string key, string? value)
+    /// <summary>The shared string table (see <see cref="Api"/>); also the built-in
+    /// Retranslation's.</summary>
+    public static void SetString(string key, string? value)
     {
         lock (_stringsLock)
         {
