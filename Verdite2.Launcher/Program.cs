@@ -26,6 +26,7 @@ return Launcher.Run(new LauncherGame
     },
 
     RecompilerConfig = "kf2.json",
+    BeforeDisc = Verdite2.Launcher.LanguageStep.Run,
     GameAssembly = "KingsField2",
     UpdateRepository = "Voicedrew11/verdite2",
 

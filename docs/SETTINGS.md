@@ -86,7 +86,8 @@ HUD to OFF, pointing at row 1 moved it back, a click at (5,230) opened the quest
 | WORLD | RENDER DISTANCE | ORIGINAL, ENHANCED | `kf2.renderdistance`: 10.5 tiles (off) or 15 (its maximum; not judged) |
 | | FOG | CORNERS, PIXEL DEPTH, DISTANCE | `kf2.fog`: the game's fog at the corners, by pixel depth, or by distance from the eye (the default since 2026-10-09; a kept `kf2.fog` still wins) (`KF2_FOG`; RENDERING, "Fog by distance from the eye") |
 | | WATER | ORIGINAL, ENHANCED, FULL | `kf2.murk.on`, `kf2.waves.on`, `kf2.ssr.planar`: ENHANCED murk and waves, FULL the planar reflection too (the default) |
-| GAMEPLAY | RELOAD ON DEATH | OFF, ON | `kf2.autoreload.enabled` |
+| GAMEPLAY | LANGUAGE | ENGLISH, JAPANESE, RESTART | `verdite.language` (`ja`, or absent for English), read at the next start; JAPANESE needs the player's Japanese disc (JAPANESE, "Which disc, and what each gets") |
+| | RELOAD ON DEATH | OFF, ON | `kf2.autoreload.enabled` |
 | | COMPARE GEAR | OFF, ON | `kf2.gearcompare.enabled` |
 | | ENEMY TURN | ORIGINAL, X1.25 … X8 | `kf2.enemyturn` (PATCHES_AND_MODS, "Enemies turn faster"); tracking while standing stays in the Settings window |
 | | MAP | WHOLE AREA, AS YOU GO | the map mod's own page (`mods/map`, `MapPage`), present only with `kf2.map` enabled in the Mods panel: `kf2.map.fog`; enabling the mod is the on switch, so `kf2.map.on` is no longer read. Not a PORT SETTINGS row any more |

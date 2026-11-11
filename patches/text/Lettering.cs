@@ -185,7 +185,8 @@ public static class Lettering
 
     public static void BeforeUpload(CpuContext c, IMemory m)
     {
-        if (StoodDown) return;
+        // A Japanese run's pictures are the Japanese disc's own (Japanese.JapaneseMix).
+        if (StoodDown || Japanese.JapaneseDisc.Active) return;
         try { Pictures.BeforeUpload(m, c.A0); }
         catch (Exception e) { Console.WriteLine($"[KF2] text: picture: {e.Message}"); }
     }
@@ -195,6 +196,7 @@ public static class Lettering
         if (StoodDown) return;
         try { MenuCells.BeforeLoadImage(c, m); }
         catch (Exception e) { Console.WriteLine($"[KF2] text: font: {e.Message}"); }
+        if (Japanese.JapaneseDisc.Active) return;   // the messages in play are the Japanese disc's
         try { HudMessages.BeforeLoadImage(c, m); }
         catch (Exception e) { Console.WriteLine($"[KF2] text: on-screen messages: {e.Message}"); }
     }
@@ -202,6 +204,7 @@ public static class Lettering
     public static void DrawLabel(Action<CpuContext, IMemory> orig, CpuContext c, IMemory m)
     {
         if (StoodDown) { orig(c, m); return; }
+        if (Japanese.JapaneseMenu.TryDraw(c, m)) return;
         MenuLabels.Draw(orig, c, m);
     }
 
@@ -251,8 +254,11 @@ public static class Lettering
         }
         try { MenuCells.UploadOnce(c, m); }
         catch (Exception e) { Console.WriteLine($"[KF2] text: font: {e.Message}"); }
-        try { HudMessages.UploadOnce(c, m); }
-        catch (Exception e) { Console.WriteLine($"[KF2] text: on-screen messages: {e.Message}"); }
+        if (!Japanese.JapaneseDisc.Active)
+        {
+            try { HudMessages.UploadOnce(c, m); }
+            catch (Exception e) { Console.WriteLine($"[KF2] text: on-screen messages: {e.Message}"); }
+        }
         if (_tests.Count > 0) OpenTest(c, m);
     }
 

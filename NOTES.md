@@ -482,6 +482,19 @@ The plan to draw the world from meshes kept on the GPU (retained-mode rendering)
 - The old path stays as the comparison
 - Rules this keeps
 
+### [JAPANESE.md](docs/JAPANESE.md)
+
+The game in Japanese from the player's own Japanese *King's Field II* (SLPS-00069, or the Best SLPS-91003): dialogue, signs, item descriptions and the messages in play served sector for sector over the US disc, the menu's words drawn from the Japanese GAME.EXE's records through a glyph atlas in the US font page, and the Japanese title and movies. Off by default (`KF2_LANGUAGE=ja`, PORT SETTINGS ▸ GAMEPLAY ▸ LANGUAGE); measured, not judged.
+
+- Which disc, and what each gets
+- What comes from the Japanese disc
+- The menu's text
+- The 1995 program
+- The title and the movies
+- Switches and checks
+- Measured (2026-11-11)
+- Open
+
 ### [SHARING.md](docs/SHARING.md)
 
 Sharing this port's work with Verdite1 and Verdite3: what in the repository is the RecompOne fork, what is game-agnostic, what is a mechanism that might generalize and what is this game's alone, and the progress log of the program. The plan, its phases and its rules are [SHARING_PLAN.md](docs/SHARING_PLAN.md); the per-file detail is [SHARING_INVENTORY.md](docs/SHARING_INVENTORY.md). Phase 0, the inventory, is written and awaits review.

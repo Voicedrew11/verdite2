@@ -82,6 +82,15 @@ public static class PrimBuffer
     public const uint PropBytes = 0x2000u;
     public static uint PropScratch => WaveScratch + WaveBytes;
 
+    /// <summary>Past the props: the Japanese card messages' records, which can run to more
+    /// lines than the game's own buffer holds (<see cref="Japanese.JapaneseMenu"/>).</summary>
+    public const uint TextBytes = 0x400u;
+    public static uint TextScratch => PropScratch + PropBytes;
+
+    /// <summary>Whether guest RAM reaches past <see cref="TextScratch"/>: false when the buffers
+    /// are not moved (KF2_PRIMBUF=1), and the console's 2 MB is all there is.</summary>
+    public static bool HasTextScratch => (TextScratch & 0x1FFFFFFFu) + TextBytes <= RamSize;
+
     /// <summary>The mirrored walk's arena, ordering table and scratch, in that order
     /// after the two buffers; valid only while <see cref="Relocated"/>.</summary>
     public static uint MirrorArena => Base + 2u * Bytes;
@@ -98,7 +107,7 @@ public static class PrimBuffer
     {
         get
         {
-            uint need = Scale > 1 ? (Base & 0x1FFFFFFFu) + 2u * Bytes + MirrorBytes + WaveBytes + PropBytes : MemoryMap.RetailRamSize;
+            uint need = Scale > 1 ? (Base & 0x1FFFFFFFu) + 2u * Bytes + MirrorBytes + WaveBytes + PropBytes + TextBytes : MemoryMap.RetailRamSize;
             if (uint.TryParse(Environment.GetEnvironmentVariable("KF2_RAMSIZE"), out uint mb) && mb is > 0 and <= 8)
                 need = Math.Max(need, mb << 20);
             uint size = MemoryMap.RetailRamSize;

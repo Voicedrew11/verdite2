@@ -313,6 +313,21 @@ public static class PortSettings
         Stored = Stored.Float, Ui = Ui.None, Min = EnemyTurn.Min, Max = EnemyTurn.Max,
     };
 
+    /// <summary>The Japanese pictures, messages, menus and movies from the player's own
+    /// Japanese disc (patches/japanese/, docs/JAPANESE.md). Stored as the text "ja" (or
+    /// nothing for English, which removes the key), and takes effect at the next start:
+    /// the value is kept and shown, and the layer is not changed in this run.</summary>
+    public static readonly PortSetting Language = new()
+    {
+        Key = LanguageChoice.Key, Envs = ["KF2_LANGUAGE"], Label = "Language (next start)",
+        Tip = "The Japanese text, pictures, menus and movies, from your own Japanese King's Field II disc (SLPS-00069 or SLPS-91003) " +
+              "in the same folder as the US disc or in its \"japanese\" subfolder. The menus need the PlayStation the Best disc. " +
+              "Takes effect the next time the game starts.",
+        Page = Gameplay, MenuLabel = "LANGUAGE", Steps = [0, 1], MenuValue = Named([0, 1], "ENGLISH", "JAPANESE, RESTART"),
+        Names = ["English", "Japanese"], Default = 0, Live = () => Japanese.JapaneseDisc.Choice, Apply = v => Japanese.JapaneseDisc.Choice = v,
+        Keys = v => [(LanguageChoice.Key, v is > 0.5 ? LanguageChoice.Japanese : null)], Ui = Ui.Combo,
+    };
+
     /// <summary>Verdite Core's pause while the window is in the background; the
     /// Settings window's Gameplay tab only.</summary>
     public static readonly PortSetting FocusPauseOn = Switch(FocusPause.OnKey, "KF2_FOCUS_PAUSE", "Pause in the background",
@@ -456,7 +471,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRateRow,
         TextureFilter, PerPixel, AmbientOcclusionRow, ShadingRow,
         RenderDist, FogMode, Water,
-        AutoReloadOn, GearCompareOn, EnemyTurnSpeed,
+        Language, AutoReloadOn, GearCompareOn, EnemyTurnSpeed,
         ControlsRow, InvertedCamera, StickSens, MouseSens, Gyro, RumbleRow,
         Positional,
     ];
@@ -468,7 +483,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRate, Smoothing,
         Mipmaps, Anisotropy, PerPixel, Ao, AoQuality, NoDitherOn, TrueColorOn,
         RenderDist, FogMode, MurkyWater, WaterWaves, Planar,
-        AutoReloadOn, GearCompareOn, EnemyTurnSpeed, FocusPauseOn,
+        Language, AutoReloadOn, GearCompareOn, EnemyTurnSpeed, FocusPauseOn,
         Controls, StickAccel, InvertedCamera, StickTurn, StickLook, MouseTurn, MouseLookSens, ItemTurnOn, ItemTurnGyro, GyroAimOn, RumbleOn, RumbleHd,
         Positional,
     ];

@@ -368,6 +368,19 @@ Kf2.Text.Lettering.Configure(Environment.GetEnvironmentVariable("KF2_TEXT"),
                              Environment.GetEnvironmentVariable("KF2_TEXT_TEST"));
 Kf2.Text.Lettering.Install();
 
+// The Japanese language: the Japanese King's Field II's pictures, messages and menu
+// words laid over the US disc from the player's own Japanese disc (SLPS-00069 or
+// SLPS-91003), the US program and gameplay data kept. English unless chosen.
+// docs/JAPANESE.md.
+//
+//     KF2_LANGUAGE=ja|en      the language; unset, PORT SETTINGS ▸ GAMEPLAY ▸ LANGUAGE decides
+//     KF2_JP_DISC=path        the Japanese .cue or .chd; else beside the US disc
+//     KF2_JP_PROBE=1          each file's plan, served sectors, labels with no Japanese
+//     KF2_JP_DRYRUN=1         build the plan and the menu's words, log them, exit
+Kf2.Japanese.JapaneseDisc.Install();
+Kf2.Japanese.JapaneseMenu.Install();
+Kf2.Japanese.JapaneseMovies.Install();
+
 // The loading screen's walking figure is the same bug in a third place, and the
 // shared cause is that the game counts time in VSync(0) calls while a VSync(0)
 // call here is no longer a vblank. A disc read is a blocking wait rather than a
