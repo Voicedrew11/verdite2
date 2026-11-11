@@ -20,6 +20,34 @@ hashes, and every word and picture is read from the player's own discs at run ti
 | `tools/verdite-core/src/Language/` | shared with Verdite3: `MixedDiscImage`, `DiscFinder`, `DiscArchive`, `ExeInterpreter` (the MIPS constant reader), `LanguageChoice` |
 | `Verdite2.Launcher/LanguageStep.cs` | the first-run question, ported from Verdite3 |
 
+## The first-run language step
+
+The shipped launcher asks before the US disc, as Verdite3's does
+(`Verdite2.Launcher/LanguageStep.cs`, through Core's `LauncherGame.BeforeDisc`):
+English, English retranslated, or Japanese. Japanese then asks for the Japanese disc,
+accepts only `SLPS-00069` or `SLPS-91003` (the game's own test), and saves
+`verdite.language=ja` and `verdite.language.jpdisc`; the Retranslation saves
+`verdite.language=retranslation`; English saves nothing.
+
+- One key, three values, so the launcher and PORT SETTINGS ▸ GAMEPLAY ▸ LANGUAGE read
+  and write the same thing. The Retranslation was `kf2.retranslation.on` until
+  2026-11-11, moved because of the next point; a store holding that key now reads
+  English.
+- No key is under `kf2.`: they are written before setup, whose `existing` prefix in
+  `config/onboarding.json` would otherwise take a new player for a returning one and
+  start the display page on what is set, not on what suits the monitor.
+- Asked once (`verdite.language.asked`), and only when the launcher is about to ask
+  for the disc, so a player with a working game is not asked. `VERDITE2_SETUP=1` asks
+  again (it read `VERDITE3_SETUP` when ported, until 2026-11-11).
+- The window opens the disc picker as it loads, so the step closes it and opens it
+  again afterwards.
+- Either Japanese disc picked as the main disc is refused by name (`WrongDiscs` in
+  `Verdite2.Launcher/Program.cs`), pointing the player at the language step.
+- RUN SETUP does not ask the language: it is the LANGUAGE row's, beside it.
+- Measured: both builds clean; a stored `retranslation` reads `retranslation: new`
+  and no stored value `original`, headless into fdat05. **The step itself has not
+  been run in a window** (it is ImGui; nothing drives it headless).
+
 ## Which disc, and what each gets
 
 | disc | volume id | GAME.EXE | gets |

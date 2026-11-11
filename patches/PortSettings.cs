@@ -317,8 +317,8 @@ public static class PortSettings
     /// translation made from the Japanese release, <see cref="Retranslation.Retranslation"/>,
     /// live, and always in the port's font), or Japanese from the player's own Japanese
     /// disc (patches/japanese/, docs/JAPANESE.md), which takes effect at the next start:
-    /// that value is kept and shown, and the layer is not changed in this run. Two keys:
-    /// verdite.language ("ja", or none) and kf2.retranslation.on (1, or none).</summary>
+    /// that value is kept and shown, and the layer is not changed in this run. One key,
+    /// verdite.language: "ja", "retranslation", or none for English.</summary>
     public static readonly PortSetting Language = new()
     {
         Key = LanguageChoice.Key, Envs = ["KF2_LANGUAGE", "KF2_RETRANSLATION"], Label = "Language",
@@ -338,8 +338,12 @@ public static class PortSettings
         },
         Keys = v =>
         [
-            (LanguageChoice.Key, v is > 1.5 ? LanguageChoice.Japanese : null),
-            (Retranslation.Retranslation.OnKey, v is > 0.5 and < 1.5 ? "1" : null),
+            (LanguageChoice.Key, v switch
+            {
+                > 1.5 => LanguageChoice.Japanese,
+                > 0.5 => Retranslation.Retranslation.LanguageValue,
+                _ => null,
+            }),
         ],
         Ui = Ui.Combo,
     };

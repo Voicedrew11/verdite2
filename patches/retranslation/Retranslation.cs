@@ -38,14 +38,17 @@ public static class Retranslation
 {
     const string Owner = "kf2.retranslation";
 
-    public const string OnKey = "kf2.retranslation.on";
+    /// <summary>LanguageChoice.Key's value for the Retranslation: the language is one key,
+    /// "ja", this, or none for English. Not a kf2. key, so the launcher's first-run
+    /// language step can write it without setup taking a new player for a returning one.</summary>
+    public const string LanguageValue = "retranslation";
     public const string PicturesKey = "kf2.retranslation.pictures";
     public const string StringsKey = "kf2.retranslation.strings";
     public const string EncyclopediaKey = "kf2.retranslation.encyclopedia";
     public const string WorkbookKey = "kf2.retranslation.workbook";
 
-    /// <summary>The Retranslation is the language (LANGUAGE ▸ RETRANSLATION). Stored as 1,
-    /// absent otherwise.</summary>
+    /// <summary>The Retranslation is the language (LANGUAGE ▸ RETRANSLATION), stored as
+    /// <see cref="LanguageValue"/> under LanguageChoice.Key.</summary>
     public static bool On { get; set; }
 
     // The parts, the mod's own switches and keys (Video ▸ Text).
@@ -83,7 +86,7 @@ public static class Retranslation
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
             var view = RecompOne.Runtime.Runtime.View;
-            On = _forced ?? view.GetInt(OnKey, 0) != 0;
+            On = _forced ?? LanguageChoice.Stored() == LanguageValue;
             Pictures = view.GetBool(PicturesKey, true);
             Strings = view.GetBool(StringsKey, true);
             Encyclopedia = view.GetBool(EncyclopediaKey, true);

@@ -3623,7 +3623,7 @@ comparison's new lettering has not been looked at.
 **Off by default; a player's choice**: the second of three languages on PORT SETTINGS ▸
 GAMEPLAY ▸ LANGUAGE (ENGLISH, RETRANSLATION, JAPANESE; the Settings window's Gameplay ▸
 *Language*), live, unlike JAPANESE, which waits for the next start; its parts and the
-workbook in the *Translation* section of Video ▸ Text; `kf2.retranslation.on`;
+workbook in the *Translation* section of Video ▸ Text; `verdite.language=retranslation`;
 `KF2_RETRANSLATION=0|1`. Brought in from the Retranslation mod (`kf2.retranslation`) of
 PerdueEgg's verdite2-mods (https://github.com/PerdueEgg/verdite2-mods, `mods/retranslation`,
 at `12df02b`), 2026-11-11, at the user's request: a new English translation made from the
@@ -3652,10 +3652,12 @@ What changed on the way in:
   (from both of Lettering's hooks, so PORT SETTINGS, which is a menu with no main loop,
   takes effect at once) applies the difference, and an Import hands its tables over for it
   to install.
-- **One LANGUAGE row, two keys.** The row's value is 0 English, 1 Retranslation, 2
-  Japanese, kept as `verdite.language` (`ja` or none) and `kf2.retranslation.on` (1 or
-  none), so Verdite Core's language choice and the launcher read what they always read.
-  Choosing one clears the other.
+- **One LANGUAGE row, one key.** The row's value is 0 English, 1 Retranslation, 2
+  Japanese, kept as `verdite.language`: none, `retranslation` or `ja`. Verdite Core's
+  language choice tests only for `ja`, so the Retranslation reads as not Japanese; and
+  the launcher's first-run step can write it, which a `kf2.` key would not allow (see
+  "The first-run language step" in JAPANESE.md). It was `kf2.retranslation.on` until
+  2026-11-11.
 - **It is always in the new font.** While the Retranslation is the language, `Lettering`
   draws MODERN whatever FONT holds (`Lettering.WantModern`), and FONT shows MODERN, dimmed;
   back to English, FONT's own choice returns. The font pages read the font the game thread
