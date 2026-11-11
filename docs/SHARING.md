@@ -232,7 +232,7 @@ needs a frame boundary.
 | `find_writers.py`, `check_gate.py`, `rate_census.py`, `rate_matrix.py` | C | the main-loop model through `kf2model.py`; `rate_*` add RAM addresses (object table, death counter, needle) and scenario drivers |
 | `light_probe.c`, `shader_probe.c` | C | the shader's uniform and material-table contract, which is the fork's (`0048`, `0067`, `0071`), not the game's |
 | `kf2model.py` | D | the keystone: main loop address, stage labels, gate source, generated class. **A per-game JSON for it turns `check_gate.py`, `find_writers.py` and `rate_census.py` into B.** |
-| `msg_glyphs.py` | D | the message archive, its ids, the glyph grid, the output class |
+| `msg_glyphs.py` | D | removed 2026-11-10 with `MessageText`; the Text feature (`patches/text/`) redraws messages instead |
 
 ## Bucket C: patches whose mechanism might generalize
 

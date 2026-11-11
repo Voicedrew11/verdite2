@@ -354,16 +354,19 @@ Kf2.MenuWorld.Configure(Environment.GetEnvironmentVariable("KF2_MENUWORLD"),
                         Environment.GetEnvironmentVariable("KF2_MESSAGE_FADE"));
 Kf2.MenuWorld.Install();
 
-// Sign and dialogue text drawn as text on an opaque box, decoded from the message's
-// own picture in RAM against a glyph table built by scripts/msg_glyphs.py. Off.
+// The game's text in new fonts, with lower case and proportional spacing: signs,
+// dialogue, descriptions and place cards redrawn from their US text, the menus,
+// names and messages in play in normal capitalisation, optional drop shadows.
+// Video > Text. Publishes the "kf2.text" slot the Retranslation, Shortcuts and
+// Japanese Disc mods draw their own text through (was the Text mod).
 //
-//     KF2_MESSAGETEXT=1         on
-//     KF2_MESSAGETEXT_PROBE=1   each message's key and decoded text
-//     KF2_MESSAGETEXT_TEST=3:0  open these messages from the main loop (KF2_AUTOPAD dismisses)
-Kf2.MessageText.Configure(Environment.GetEnvironmentVariable("KF2_MESSAGETEXT"),
-                          Environment.GetEnvironmentVariable("KF2_MESSAGETEXT_PROBE"),
-                          Environment.GetEnvironmentVariable("KF2_MESSAGETEXT_TEST"));
-Kf2.MessageText.Install();
+//     KF2_TEXT=0               the game's own lettering -- comparison only
+//     KF2_TEXT_PROBE=1         a line for each picture redrawn
+//     KF2_TEXT_TEST=3:0,6:360  open these messages from the main loop (KF2_AUTOPAD dismisses)
+Kf2.Text.Lettering.Configure(Environment.GetEnvironmentVariable("KF2_TEXT"),
+                             Environment.GetEnvironmentVariable("KF2_TEXT_PROBE"),
+                             Environment.GetEnvironmentVariable("KF2_TEXT_TEST"));
+Kf2.Text.Lettering.Install();
 
 // The loading screen's walking figure is the same bug in a third place, and the
 // shared cause is that the game counts time in VSync(0) calls while a VSync(0)

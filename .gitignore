@@ -64,3 +64,4 @@ dump/
 
 # scripts/fuzz.py: one directory per run, and the report.
 /fuzz/
+/fonts/

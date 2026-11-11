@@ -311,6 +311,7 @@ The reverse-engineered game: main loop, player state, stats, death, movement, ar
 - The frame's applied position delta is a triple of its own
 - Player state: found, and it was in stage 3 all along
 - The inventory is one byte per item, and the item id is the name-table index
+- The menu font is a VRAM page, and the messages in play are another
 - Saving and loading
 - Debug tools
 - The wall slide never leaves a wall it starts in
@@ -333,7 +334,7 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - The water still steps at the tick
 - Menus draw the world live
 - Messages draw the world live
-- Drawing message text
+- The game's text in new fonts
 - Pausing when the window loses focus
 - Auto reload
 - Comparing gear on the equip prompt

@@ -235,6 +235,7 @@ public static class PatchSettings
         Register("display", new RemasterPage());
         Register("display", new RemasterPacksPage());
         Register("display", new FastGeometryPage());
+        Register("display", new TextPage());
         // Nothing registers a PGXP or a geometry-precision page either. PGXP buys
         // no coverage in this game and costs a fifth of the frame rate, and the
         // depth buffer's picture has never been judged -- both are comparisons, so

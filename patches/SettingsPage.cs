@@ -406,7 +406,7 @@ public static class SettingsPage
     /// <summary>The label at <paramref name="rec"/>. A dimmed one has its quads
     /// rewritten to the darker grey: every primitive the draw adds is a 0x28-byte
     /// quad from the cursor, so the ones from the cursor before to the cursor after
-    /// are the label's.</summary>
+    /// are the label's, and a label's menu shadows (<see cref="Text.Shadow"/>) stay dark.</summary>
     static void Label(CpuContext c, IMemory m, uint rec, bool dim)
     {
         uint from = m.ReadU32(MenuDraw.Cursor);
@@ -416,6 +416,7 @@ public static class SettingsPage
         uint to = m.ReadU32(MenuDraw.Cursor);
         for (uint p = from; p < to; p += QuadSize)
         {
+            if (Text.Shadow.IsMenuShadow(m, p)) continue;
             m.WriteU8(p + 4, (byte)DimGrey);
             m.WriteU8(p + 5, (byte)DimGrey);
             m.WriteU8(p + 6, (byte)DimGrey);
