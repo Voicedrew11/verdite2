@@ -159,9 +159,44 @@ caller. The format question sizes its own box (`func_800222B8` from `0x8001CD18`
 (70, 91, 178 × 66), Japan (70, 92, 220 × 81). Under `KF2_PRIMBUF=1` there is no RAM past
 2 MB, and the card messages stay English.
 
-Not done: the port's own pages and the gear comparison stay English (the US font is
-kept for them); whether the Japanese GAME.EXE swaps confirm and cancel, as Verdite3's
-does, has not been looked at.
+Not done: whether the Japanese GAME.EXE swaps confirm and cancel, as Verdite3's does,
+has not been looked at.
+
+## The port's own words
+
+PORT SETTINGS (the menu item, its six pages, every row and value, the question on
+leaving) and the gear comparison have no text on the Japanese disc, so the port writes
+its own (`JapanesePortText`), in what the Japanese label font holds. The font is a
+character table now (`JapaneseGlyphs`, read off the page and checked by decoding the
+Japanese program's own labels with it): every katakana, the small ァィゥェォッャュョ,
+every hiragana but the small ゃゅょ (っ is there), and about 190 kanji, only those the
+game's menus used. So 設定, 画面, 距離 are spelled in kana or worded round (PCせってい,
+表示はんい, カメラから), and a reading with a small ゃゅょ is avoided or put in katakana.
+The game's own words are used where it has them: On/Off from the option page, and the
+status pages' 攻撃力, 防御力, 体力, 魔力, 切る, 打つ, 刺す, 聖の魔法 (and 魔の魔法 for dark).
+
+- **Lookup.** A label with no Japanese from the game's tables is looked up by its text in
+  the port's words last. A list record the port rewrote is no longer looked up by its
+  address: RETURN's record (which PORT SETTINGS takes) showed もどる, the record's Japanese,
+  while it opened the settings; a record's Japanese now applies only while it holds its
+  US text. A value made of parts ("60 NO SMOOTH", "4X NO MIPMAPS") is put together a word
+  at a time; a word with a digit (60, 2D, 4X, 1080P, 16/9, X1.5) and HD stay in Latin.
+- **Latin inside Japanese.** A code with bit `0x8000` holds an ASCII character, drawn from
+  the US label font as the disc's full-width Latin cells are (HUDをはしに, NPCかいわ).
+- **The gear comparison** draws through `MenuDraw.DrawText`, which asks
+  `JapaneseMenu.TryDrawText` first; `GearCompare` passes the Japanese itself, since the
+  shop's short forms clash with the settings' words ("OFF" is OFFENSE there). Its NOW and
+  NEW are いま and あと; in the shop's two columns NOW moves 2 px left to fit. Not under
+  `KF2_GEARCOMPARE=verify`, which draws through the recompiled routines.
+- **One drawing path.** The Japanese cells and the Latin runs are now written by
+  `MenuDraw.LabelCell` (the C# `func_800229D8` + `func_80022A28`, shadow included) instead
+  of calling the recompiled pair, so the gear panel, which has no CpuContext, can use them.
+- **The check.** The dry run prints `port text` for every label, every value at every
+  step and half step, the pages and the gear words: its Japanese, or MISSING, a character
+  not in the font, or TOO WIDE (8 cells for a label, 6 for a page beside "n/6", 9 for a
+  value, 2 for a shop short form).
+
+Not looked at by eye, and not by a native speaker: the wording.
 
 ## The 1995 program
 

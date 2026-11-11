@@ -50,6 +50,11 @@ public static class GearCompare
     ];
 
     static readonly string[] GroupHeads = ["", "OFFENSE", "DEFENSE"];
+    const string Total = "TOTAL", Now = "NOW", New = "NEW", NoChange = "NO CHANGE";
+
+    /// <summary>Every word the panel draws, for the Japanese layer's check.</summary>
+    public static IEnumerable<string> Words =>
+        Stats.Select(s => s.Label).Concat(GroupHeads.Where(h => h.Length > 0)).Concat([Total, Now, New, NoChange]);
 
     static int _kind = -1;        // the equipment page's kind while it is open
     static int _shop;             // buy pages open (they do not nest, but count)
@@ -248,7 +253,7 @@ public static class GearCompare
         int n = 0, a = 0;
         for (int i = 0; i < Stats.Length; i++)
             if (Stats[i].Group == group) { n += now[i]; a += after[i]; }
-        _rows.Add(("TOTAL", n, a, false));
+        _rows.Add((Total, n, a, false));
     }
 
     // ---- drawing ----
@@ -318,14 +323,14 @@ public static class GearCompare
         if (top + height > BottomLimit) top = Math.Max(TopLimit, BottomLimit - height);
         int y = top + Pad;
 
-        if (headFirst) pen.Text(x + LabelX, y, _rows[0].Text);
-        pen.Text(x + NowX - 4, y, "NOW");
-        pen.Text(x + NewX - 4, y, "NEW");
+        if (headFirst) pen.Text(x + LabelX, y, Say(_rows[0].Text, compact: false));
+        pen.Text(x + NowX - 4, y, Say(Now, compact: false));
+        pen.Text(x + NewX - 4, y, Say(New, compact: false));
         y += RowHeight;
 
         if (_rows.Count == 0)
         {
-            pen.Text(x + LabelX, y, "NO CHANGE");
+            pen.Text(x + LabelX, y, Say(NoChange, compact: false));
             y += RowHeight;
         }
         for (int i = headFirst ? 1 : 0; i < _rows.Count; i++)
@@ -333,11 +338,11 @@ public static class GearCompare
             var r = _rows[i];
             if (r.Head)
             {
-                pen.Text(x + LabelX, y, r.Text);
+                pen.Text(x + LabelX, y, Say(r.Text, compact: false));
             }
             else
             {
-                pen.Text(x + LabelX + 8, y, r.Text);
+                pen.Text(x + LabelX + 8, y, Say(r.Text, compact: false));
                 pen.Number(x + NowX, y, r.Now);
                 pen.Number(x + NewX, y, r.New);
             }
@@ -354,6 +359,16 @@ public static class GearCompare
     // columns with three-letter names, and a lone group's heading is dropped.
     const int ShopX = 92, ShopY = 78;
     const int CellW = 84, CNow = 30, CNew = 56, CRow = 12;
+
+    /// <summary>The words drawn in a Japanese run: the status pages' own
+    /// (<see cref="Kf2.Japanese.JapanesePortText.GearWord"/>). Not under verify, which
+    /// draws through the recompiled routines and their English font.</summary>
+    static bool Japanese => !_verify && Kf2.Japanese.JapaneseMenu.Drawing;
+
+    /// <summary>A word as the panel draws it: Japanese in a Japanese run (the shop's
+    /// short form when <paramref name="compact"/>), else the English.</summary>
+    static string Say(string english, bool compact) =>
+        Japanese && Kf2.Japanese.JapanesePortText.GearWord(english, compact) is { } japanese ? japanese : english;
 
     static string Short(string label) => label switch
     {
@@ -377,21 +392,23 @@ public static class GearCompare
         int x = ShopX, top = ShopY;
         int y0 = top + Pad;
 
+        // Two Japanese cells are 28 px and the columns 26 apart, so NOW moves left.
+        int nowHead = CNow - (Japanese ? 6 : 4);
         for (int k = 0; k < cols; k++)
         {
-            pen.Text(x + LabelX + k * CellW + CNow - 4, y0, "NOW");
-            pen.Text(x + LabelX + k * CellW + CNew - 4, y0, "NEW");
+            pen.Text(x + LabelX + k * CellW + nowHead, y0, Say(Now, compact: true));
+            pen.Text(x + LabelX + k * CellW + CNew - 4, y0, Say(New, compact: true));
         }
 
         if (cells.Count == 0)
-            pen.Text(x + LabelX, y0 + CRow, "NO CHANGE");
+            pen.Text(x + LabelX, y0 + CRow, Say(NoChange, compact: true));
 
         for (int i = 0; i < cells.Count; i++)
         {
             var r = cells[i];
             int cx = x + LabelX + (i / perCol) * CellW;
             int cy = y0 + CRow * (1 + i % perCol);
-            pen.Text(cx, cy, Short(r.Text));
+            pen.Text(cx, cy, Japanese ? Say(r.Text, compact: true) : Short(r.Text));
             if (!r.Head)
             {
                 pen.Number(cx + CNow, cy, r.Now);

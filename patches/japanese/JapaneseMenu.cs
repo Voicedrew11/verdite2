@@ -37,7 +37,11 @@ namespace Kf2.Japanese;
 ///     a record of an option group    that record's Japanese one, by address
 ///     one of a choice's two records  the Japanese pair, by call and argument
 ///     a call in the site table       the records the Japanese call builds, by call
-///     anything else                  by its US text: names, words, then the groups' words
+///     anything else                  by its US text: names, words, the groups' words, then
+///                                    the port's own (PORT SETTINGS, <see cref="JapanesePortText"/>)
+///
+/// A list record the port has rewritten (RETURN, which PORT SETTINGS takes) is looked up by
+/// its text, not its address. The gear comparison asks <see cref="TryDrawText"/>.
 ///
 /// The card messages take the Japanese window's line count and size too, because the
 /// Japanese program splits its sentences over more lines.
@@ -52,11 +56,6 @@ public static class JapaneseMenu
 {
     const uint LabelRoutine = 0x80021E10;
     const uint ChoiceRows = 0x800205C0, ChoicePair = 0x80021478;
-
-    /// <summary>func_800229D8 takes the next POLY_FT4 from the cursor at <see cref="PrimCursor"/>;
-    /// func_80022A28(slot) links it into the menu's ordering table.</summary>
-    const uint PrimCursor = 0x8006E914;
-    const uint LabelSlot = 10;
 
     const int RecordText = 4;
     const int MaxTextBytes = 24;
@@ -178,6 +177,9 @@ public static class JapaneseMenu
         return ok;
     }
 
+    /// <summary>The Japanese layer is on and its menu text is ready to draw.</summary>
+    public static bool Drawing => JapaneseDisc.Active && Ready();
+
     /// <summary>func_80021E10 when this takes the replace itself (the port's lettering off).</summary>
     public static void Label(Action<CpuContext, IMemory> orig, CpuContext c, IMemory m)
     {
@@ -211,7 +213,7 @@ public static class JapaneseMenu
         short recordX = (short)m.ReadU16(record), recordY = (short)m.ReadU16(record + 2);
         try
         {
-            foreach (var label in labels) Draw(c, m, template, label.X ?? recordX, label.Y ?? recordY, label.Codes);
+            foreach (var label in labels) Draw(m, template, label.X ?? recordX, label.Y ?? recordY, label.Codes);
         }
         finally
         {
@@ -330,15 +332,61 @@ public static class JapaneseMenu
     static JapaneseMenuText.Label[]? Lookup(CpuContext c, string text)
     {
         var map = _map!;
-        if (map.Records.TryGetValue(c.A1, out var record)) return [record];
+        if (map.Records.TryGetValue(c.A1, out var record) && record.UsText == text) return [record.Label];
         if (ChoiceLabel(c) is { } choice) return [choice];
 
         uint call = c.RA - 8;
         if (map.Sites.TryGetValue(call, out var sited)) return sited;
         if (map.Seeded.TryGetValue(call, out var seeded) && seeded.TryGetValue(text, out var picked)) return [picked];
-        if (map.Names.TryGetValue(text, out var name)) return [Words(name)];
-        if (map.Words.TryGetValue(text, out var word)) return [Words(word)];
-        return map.Titles.TryGetValue(text, out var title) ? [Words(title)] : null;
+        return LookupText(text) is { } codes ? [Words(codes)] : null;
+    }
+
+    /// <summary>A label's Japanese by its US text alone (the record's cells): the game's
+    /// names, words and the groups' words, then the port's own words.</summary>
+    static ushort[]? LookupText(string text)
+    {
+        if (LookupGame(text) is { } game) return game;
+        return JapanesePortText.For(English(text)) is { } japanese ? JapaneseGlyphs.Encode(japanese, out _) : null;
+    }
+
+    /// <summary>A record's cells as English capitals: the disc's cells, or the port's
+    /// lettering's (lower case included) for a word it encoded.</summary>
+    static string English(string cells)
+    {
+        var text = new StringBuilder(cells.Length);
+        foreach (char cell in cells)
+        {
+            char ch = Text.MenuCells.Char(cell);
+            text.Append(ch == '\0' ? '?' : char.ToUpperInvariant(ch));
+        }
+        return text.ToString();
+    }
+
+    /// <summary>
+    /// The gear comparison's words (<see cref="MenuDraw.DrawText"/>, no CpuContext): drawn in
+    /// Japanese when the layer is on and they have a version, and says so. Japanese text is
+    /// drawn as it is; English is looked up as a label drawn from it would be.
+    /// </summary>
+    public static bool TryDrawText(IMemory m, uint template, int x, int y, string text)
+    {
+        if (!JapaneseDisc.Active || !Ready() || text.Length == 0) return false;
+        ushort[]? codes = text.Any(ch => ch > '~')
+            ? JapaneseGlyphs.Encode(text, out _)
+            : LookupText(Cells(text));
+        if (codes is null) return false;
+        Draw(m, template, x, y, codes);
+        _japaneseDraws++;
+        ReportEvery();
+        return true;
+    }
+
+    /// <summary>English as a record holds it, in the disc's cells (as MenuDraw writes it).</summary>
+    static string Cells(string english)
+    {
+        var cells = new StringBuilder(english.Length);
+        foreach (char ch in english.ToUpperInvariant())
+            cells.Append(Text.MenuCells.DiscCells.TryGetValue(ch, out int cell) ? (char)cell : (char)UsSpace);
+        return cells.ToString();
     }
 
     static JapaneseMenuText.Label Words(ushort[] codes) => new(null, null, codes);
@@ -376,6 +424,7 @@ public static class JapaneseMenu
             {
                 foreach (var skipped in _map.Skipped) Console.WriteLine($"[KF2] japanese menu: left out: {skipped}");
                 foreach (var line in JapaneseMenuText.Describe(_map)) Console.WriteLine($"[KF2] japanese menu: {line}");
+                foreach (var line in CheckPortText()) Console.WriteLine($"[KF2] japanese menu: {line}");
             }
         }
         catch (Exception e) when (e is InvalidDataException or IOException)
@@ -387,6 +436,34 @@ public static class JapaneseMenu
         return _atlas is not null;
     }
 
+    /// <summary>The port's own words (PORT SETTINGS' labels, every value at every step and
+    /// half step, its pages and question, the gear comparison), each with its Japanese or
+    /// what is wrong with it. A word the game's tables already translate is shown as theirs.</summary>
+    static IEnumerable<string> CheckPortText()
+    {
+        var labels = PortSettings.Menu.Select(s => s.MenuLabel).OfType<string>().Concat(SettingsPage.OwnLabels);
+        var values = new List<string>();
+        foreach (var setting in PortSettings.Menu)
+            foreach (double step in setting.Steps.SelectMany(v => new[] { v, v - 0.5, v + 0.5 }).Append(-1))
+            {
+                try { values.Add(setting.MenuValue(step)); }
+                catch (Exception e) when (e is ArgumentException or IndexOutOfRangeException or KeyNotFoundException) { }
+            }
+        var game = labels.Concat(values).Where(word => LookupGame(Cells(word)) is not null).Distinct().ToList();
+        foreach (var word in game)
+            yield return $"port text \"{word}\" -> {JapaneseGlyphs.Decode(LookupGame(Cells(word))!)} (the game's own)";
+        foreach (var line in JapanesePortText.Check(labels.Except(game), values.Except(game), PortSettings.Pages, GearCompare.Words))
+            yield return line;
+    }
+
+    static ushort[]? LookupGame(string cells)
+    {
+        var map = _map!;
+        if (map.Names.TryGetValue(cells, out var name)) return name;
+        if (map.Words.TryGetValue(cells, out var word)) return word;
+        return map.Titles.TryGetValue(cells, out var title) ? title : null;
+    }
+
     static byte[] Required(Func<string, byte[]?> read, string path, string disc) =>
         read(path) ?? throw new InvalidDataException($"the {disc} disc's {path} cannot be read");
 
@@ -395,18 +472,18 @@ public static class JapaneseMenu
     /// <summary>The Japanese label routine's primitives for a string of codes: a cell per code,
     /// and an accent's cell over it; a run of Latin letters in the US font's cells. A label
     /// right-aligned by leading blanks still ends where the Japanese routine's would.</summary>
-    static void Draw(CpuContext c, IMemory m, uint template, int x, int y, ushort[] codes)
+    static void Draw(IMemory m, uint template, int x, int y, ushort[] codes)
     {
         var cells = Layout(codes, out int width);
         if (codes.Length > 0 && (codes[0] & GlyphMask) == BlankGlyph) x += codes.Length * PenStep - width;
         foreach (var (code, us, at) in cells)
         {
             int pen = x + at;
-            if (us >= 0) { DrawUsCell(c, m, template, us, pen, y); continue; }
+            if (us >= 0) { DrawUsCell(m, template, us, pen, y); continue; }
             int glyph = code & GlyphMask;
-            if (glyph != BlankGlyph) DrawCell(c, m, template, glyph, pen, y);
-            if ((code & DakutenBit) != 0) DrawCell(c, m, template, DakutenGlyph, pen, y);
-            if ((code & HandakutenBit) != 0) DrawCell(c, m, template, HandakutenGlyph, pen, y);
+            if (glyph != BlankGlyph) DrawCell(m, template, glyph, pen, y);
+            if ((code & DakutenBit) != 0) DrawCell(m, template, DakutenGlyph, pen, y);
+            if ((code & HandakutenBit) != 0) DrawCell(m, template, HandakutenGlyph, pen, y);
         }
     }
 
@@ -418,7 +495,7 @@ public static class JapaneseMenu
         int pen = 0;
         for (int i = 0; i < codes.Length;)
         {
-            if (!Latin.ContainsKey(codes[i]))
+            if (LatinChar(codes[i]) == '\0')
             {
                 cells.Add((codes[i], -1, pen));
                 pen += PenStep;
@@ -426,13 +503,21 @@ public static class JapaneseMenu
                 continue;
             }
             var run = new List<byte>();
-            for (; i < codes.Length && Latin.TryGetValue(codes[i], out char ch); i++) run.Add(UsCell(ch));
+            for (char ch; i < codes.Length && (ch = LatinChar(codes[i])) != '\0'; i++) run.Add(UsCell(ch));
             var at = Text.Lettering.Drawing ? Text.MenuLabels.Place(run, out int runWidth) : Classic(run.Count, out runWidth);
             for (int k = 0; k < run.Count; k++) cells.Add((-1, run[k], pen + at[k]));
             pen += runWidth + (i < codes.Length ? LatinGap : 0);
         }
         width = pen;
         return cells;
+    }
+
+    /// <summary>The Latin letter a code stands for: one of the disc's full-width cells, or
+    /// a character the port wrote (<see cref="JapaneseGlyphs.LatinBit"/>); '\0' for a Japanese cell.</summary>
+    static char LatinChar(ushort code)
+    {
+        if ((code & JapaneseGlyphs.LatinBit) != 0) return (char)(code & 0x7F);
+        return Latin.TryGetValue(code, out char ch) ? ch : '\0';
     }
 
     static int[] Classic(int count, out int width)
@@ -448,55 +533,28 @@ public static class JapaneseMenu
     static byte UsCell(char ch)
     {
         if (Text.Lettering.Drawing && Text.MenuCells.Index(ch) is >= 0 and var cell) return (byte)cell;
-        return (byte)Text.MenuCells.DiscCells[char.ToUpperInvariant(ch)];
+        return Text.MenuCells.DiscCells.TryGetValue(char.ToUpperInvariant(ch), out int disc) ? (byte)disc : UsSpace;
     }
+
+    /// <summary>The US font's blank cell, for a space or a mark it lacks.</summary>
+    const byte UsSpace = 0x7F;
 
     /// <summary>One cell of the US font, as func_80021E10 builds it: the template's tpage,
     /// CLUT and cell size (+8, +0xA).</summary>
-    static void DrawUsCell(CpuContext c, IMemory m, uint template, int cell, int x, int y)
+    static void DrawUsCell(IMemory m, uint template, int cell, int x, int y)
     {
         int w = m.ReadU8(template + 8), h = m.ReadU8(template + 0xA);
-        int u = (cell & 15) * UsCellU, v = (cell >> 4) * UsCellV;
-
-        KingsField2.func_800229D8(c, m);
-        uint prim = m.ReadU32(PrimCursor);
-        m.WriteU16(prim + 0x16, m.ReadU16(template));
-        m.WriteU16(prim + 0x0E, m.ReadU16(template + 2));
-        Corner(m, prim + 0x08, x, y, u, v);
-        Corner(m, prim + 0x10, x + w, y, u + w, v);
-        Corner(m, prim + 0x18, x, y + h, u, v + h);
-        Corner(m, prim + 0x20, x + w, y + h, u + w, v + h);
-        c.A0 = LabelSlot;
-        KingsField2.func_80022A28(c, m);
+        MenuDraw.LabelCell(m, template, x, y, w, h, (cell & 15) * UsCellU, (cell >> 4) * UsCellV);
     }
 
-    /// <summary>One cell, as func_80021E10 builds it: a POLY_FT4 from the cursor, the template's
-    /// tpage and CLUT, the corners and the cell's u, v, linked into the label slot.</summary>
-    static void DrawCell(CpuContext c, IMemory m, uint template, int glyph, int x, int y)
+    /// <summary>One Japanese cell, as the Japanese label routine builds it: the template's
+    /// tpage and CLUT, a 15 x 15 cell at the glyph's place in the atlas.</summary>
+    static void DrawCell(IMemory m, uint template, int glyph, int x, int y)
     {
         var gpu = RecompOne.Runtime.Runtime.Gpu;
         if (gpu is null || _atlas is null) return;
         var (u, v) = _atlas.CellOf(glyph, _vblank, gpu.Vram, gpu.WriteGp0);
-
-        KingsField2.func_800229D8(c, m);
-        uint prim = m.ReadU32(PrimCursor);
-        m.WriteU16(prim + 0x16, m.ReadU16(template));
-        m.WriteU16(prim + 0x0E, m.ReadU16(template + 2));
-        Corner(m, prim + 0x08, x, y, u, v);
-        Corner(m, prim + 0x10, x + Cell, y, u + Cell, v);
-        Corner(m, prim + 0x18, x, y + Cell, u, v + Cell);
-        Corner(m, prim + 0x20, x + Cell, y + Cell, u + Cell, v + Cell);
-        c.A0 = LabelSlot;
-        KingsField2.func_80022A28(c, m);
-    }
-
-    /// <summary>A POLY_FT4 corner: s16 x, s16 y, then u8 u, u8 v.</summary>
-    static void Corner(IMemory m, uint at, int x, int y, int u, int v)
-    {
-        m.WriteU16(at, unchecked((ushort)x));
-        m.WriteU16(at + 2, unchecked((ushort)y));
-        m.WriteU8(at + 4, (byte)Math.Min(u, 255));
-        m.WriteU8(at + 5, (byte)Math.Min(v, 255));
+        MenuDraw.LabelCell(m, template, x, y, Cell, Cell, u, v);
     }
 
     static string ReadText(IMemory m, uint at)

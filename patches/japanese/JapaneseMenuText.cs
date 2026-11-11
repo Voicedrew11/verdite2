@@ -154,7 +154,9 @@ static class JapaneseMenuText
     /// <summary>Everything the menu hooks look up.</summary>
     internal sealed class Map
     {
-        public Dictionary<uint, Label> Records { get; } = new();
+        /// <summary>A list record's Japanese, by the US record's address, with the US text it
+        /// holds: a record the port rewrites (RETURN, which PORT SETTINGS takes) is not it.</summary>
+        public Dictionary<uint, (string UsText, Label Label)> Records { get; } = new();
 
         /// <summary>A list page's title, by its US text: the list routine draws the descriptor's copy of a group record.</summary>
         public Dictionary<string, ushort[]> Titles { get; } = new(StringComparer.Ordinal);
@@ -209,9 +211,9 @@ static class JapaneseMenuText
         {
             int usAt = Offset(table.UsAddress, usBase) + i * table.UsStride;
             int jpAt = Offset(table.JpAddress, jpBase) + i * table.JpStride;
-            if (UsText(us, usAt + table.TextAt, table.UsStride - table.TextAt) is null) continue;
+            if (UsText(us, usAt + table.TextAt, table.UsStride - table.TextAt) is not { } usText) continue;
             if (JpCodes(jp, jpAt + table.TextAt, table.JpStride - table.TextAt) is not { } codes) continue;
-            map.Records[table.UsAddress + (uint)(i * table.UsStride)] = new Label(null, null, codes);
+            map.Records[table.UsAddress + (uint)(i * table.UsStride)] = (usText, new Label(null, null, codes));
         }
     }
 

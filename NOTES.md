@@ -493,6 +493,7 @@ The game in Japanese from the player's own Japanese *King's Field II* (SLPS-0006
 - Which disc, and what each gets
 - What comes from the Japanese disc
 - The menu's text
+- The port's own words
 - The 1995 program
 - The title and the movies
 - Switches and checks
