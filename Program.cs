@@ -1264,6 +1264,16 @@ Kf2.MenuMouse.Install();
 Kf2.GearCompare.Configure(Environment.GetEnvironmentVariable("KF2_GEARCOMPARE"));
 Kf2.GearCompare.Install();
 
+// NPC conversations as King's Field III's: while an NPC's line is up, Interact
+// talks to them again at once (the next line) and Cancel ends it; shops and the
+// fortune teller are left alone. From verdite2-mods' mods/npc-dialogue, which it
+// stands down for. Off by default; Gameplay > NPC dialogue, PORT SETTINGS >
+// GAMEPLAY > NPC DIALOGUE.
+//
+//     KF2_NPCDIALOGUE=0|1     off or on for the run
+Kf2.NpcDialogue.Configure(Environment.GetEnvironmentVariable("KF2_NPCDIALOGUE"));
+Kf2.NpcDialogue.Install();
+
 // Enemies turn faster: every creature turn goes through func_8003C8D8, whose top
 // speed and acceleration a pre-hook scales when the turn is at the player (a chase,
 // not a wander). x1, the game's own, by default;

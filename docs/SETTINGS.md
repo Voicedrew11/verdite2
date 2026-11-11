@@ -90,6 +90,7 @@ HUD to OFF, pointing at row 1 moved it back, a click at (5,230) opened the quest
 | | FONT | CLASSIC, MODERN | `kf2.text.font` (0 or 1, absent is MODERN): the port's lettering or the game's own letters, live (PATCHES_AND_MODS, "The game's text in new fonts"); in a Japanese run the Latin letters in the menus follow it (JAPANESE, "The menu's text"); dimmed under `KF2_TEXT=0`, with the Text mod enabled, or while LANGUAGE is RETRANSLATION, when it shows MODERN |
 | | RELOAD ON DEATH | OFF, ON | `kf2.autoreload.enabled` |
 | | COMPARE GEAR | OFF, ON | `kf2.gearcompare.enabled` |
+| | NPC DIALOGUE | OFF, ON | `kf2.npcdialogue.on`: Interact goes to an NPC's next line, Cancel ends the conversation (PATCHES_AND_MODS, "NPC dialogue"); dimmed while the NPC Dialogue mod is enabled |
 | | ENEMY TURN | ORIGINAL, X1.25 … X8 | `kf2.enemyturn` (PATCHES_AND_MODS, "Enemies turn faster"); tracking while standing stays in the Settings window |
 | | MAP | WHOLE AREA, AS YOU GO | the map mod's own page (`mods/map`, `MapPage`), present only with `kf2.map` enabled in the Mods panel: `kf2.map.fog`; enabling the mod is the on switch, so `kf2.map.on` is no longer read. Not a PORT SETTINGS row any more |
 | CONTROLS | CONTROLS | 2D, 2D ACCEL, 3D | `kf2.controls` (`True` is 3D) and `kf2.analog.accel`: the setup's turning page as a row; 3D clears the acceleration, as the setup's tank option does (INPUT, "2D and 3D controls") |
