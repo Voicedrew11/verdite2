@@ -3949,6 +3949,42 @@ slot 2. The panel itself was judged by eye as the mod; the prompt is not reachab
 from the command channel (`press` does not reach the menu's Up/Down), so the
 patch's picture and its verify line on a real prompt are the user's to check.
 
+## NPC dialogue
+
+**Off by default; mechanism attached, never played in the port.** King's Field III's
+conversations: while an NPC's line is up, Interact (Cross) goes straight to their next
+line, and Cancel (Circle) ends the conversation; at the end of the dialogue Interact
+repeats the last line until Cancel, as talking again would. An NPC that opens a menu
+after talking (the shops, the fortune teller) is left as it was. Gameplay ▸ *NPC
+dialogue*, with the mod's two refinements under it (*No animations between lines*,
+*Cancel does not open the menu*, both on); PORT SETTINGS ▸ GAMEPLAY ▸ NPC DIALOGUE;
+`kf2.npcdialogue.on`, `KF2_NPCDIALOGUE=0|1`. Brought in from the NPC Dialogue mod
+(`kf2.npcdialogue`) of PerdueEgg's verdite2-mods
+(https://github.com/PerdueEgg/verdite2-mods, `mods/npc-dialogue`, at `12df02b`),
+2026-11-11, at the user's request; `patches/NpcDialogue.cs`, entry `NpcDialogue`. The
+logic is the mod's, line for line; the class comment carries its reading of the talk
+interpreter `func_80047000`, and the addresses.
+
+- **Talking again is the next line.** A talk shows one line and leaves the script
+  cursor (`rec+0x10`) after it, so the patch calls `func_80047000` again from its own
+  post, for as long as Interact closed the line. Which button closed it is read with
+  the game's `PadRead(1)` where the closing fade starts (a pre on `func_800356F4` from
+  `0x80035C6C`): the fade outlasts a tap.
+- **It runs beside MenuWorld**, which replaces `func_800356F4`. HookManager runs a
+  function's pres before its replace, so the pre still sees the caller's return address.
+- **Shops are not chained**: the record's `+0x12` high nibble 0..3 opens a menu after
+  the talk.
+- **The keys are under `kf2.npcdialogue.`**, the mod's own for the two refinements, so a
+  player who set them in the mod keeps them; the switch is new (`.on`). It stands down
+  while the mod is enabled, and its controls are dimmed.
+- **Ships off** because nobody has talked to an NPC with it in the port: the measured
+  runs have no NPC within reach of a save, and the shell cannot read RAM to find one.
+
+Measured: build clean; `[KF2] npc dialogue: on, 4/4 hooked` into fdat05 from slot 2;
+`scripts/fuzz.py --runs 12 --env KF2_NPCDIALOGUE=1`, 240,000 frames, no findings
+(whether a run reached a conversation is not recorded). **Not tried**: a conversation,
+chained or ended with Cancel, the animations, the menu guard, a shop left alone.
+
 ## Enemies turn faster
 
 `patches/EnemyTurn.cs` is Gameplay ▸ *Enemy turn speed*, a multiplier from x1

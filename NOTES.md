@@ -339,6 +339,7 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - Pausing when the window loses focus
 - Auto reload
 - Comparing gear on the equip prompt
+- NPC dialogue
 - Enemies turn faster
 - A dynamic map
 - Five map controls that were not choices

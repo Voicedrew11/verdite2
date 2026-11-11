@@ -301,6 +301,13 @@ public static class PortSettings
         Gameplay, "COMPARE GEAR", () => GearCompare.Enabled, v => GearCompare.Enabled = v, true,
         tip: "Choosing equipment or browsing a shop shows every stat the item would change, now and after.");
 
+    /// <summary>NPC conversations as King's Field III's: Interact goes to the next line.
+    /// Its two refinements stay in the Settings window.</summary>
+    public static readonly PortSetting NpcDialogueOn = Switch(NpcDialogue.OnKey, "KF2_NPCDIALOGUE", "NPC dialogue",
+        Gameplay, "NPC DIALOGUE", () => NpcDialogue.Enabled, v => NpcDialogue.Enabled = v, false,
+        tip: "While an NPC's line is up, Interact goes straight to their next line and Cancel ends the conversation.",
+        usable: () => !NpcDialogue.StoodDown);
+
     /// <summary>How fast a creature turns at the player, as a multiple of the game's own.
     /// Tracking while standing stays in the Settings window.</summary>
     public static readonly PortSetting EnemyTurnSpeed = new()
@@ -507,7 +514,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRateRow,
         TextureFilter, PerPixel, AmbientOcclusionRow, ShadingRow,
         RenderDist, FogMode, Water,
-        Language, Font, AutoReloadOn, GearCompareOn, EnemyTurnSpeed,
+        Language, Font, AutoReloadOn, GearCompareOn, NpcDialogueOn, EnemyTurnSpeed,
         ControlsRow, InvertedCamera, StickSens, MouseSens, Gyro, RumbleRow,
         Positional,
     ];
@@ -519,7 +526,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRate, Smoothing,
         Mipmaps, Anisotropy, PerPixel, Ao, AoQuality, NoDitherOn, TrueColorOn,
         RenderDist, FogMode, MurkyWater, WaterWaves, Planar,
-        Language, Font, AutoReloadOn, GearCompareOn, EnemyTurnSpeed, FocusPauseOn,
+        Language, Font, AutoReloadOn, GearCompareOn, NpcDialogueOn, EnemyTurnSpeed, FocusPauseOn,
         Controls, StickAccel, InvertedCamera, StickTurn, StickLook, MouseTurn, MouseLookSens, ItemTurnOn, ItemTurnGyro, GyroAimOn, RumbleOn, RumbleHd,
         Positional,
     ];
