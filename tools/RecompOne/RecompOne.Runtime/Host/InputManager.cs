@@ -470,7 +470,7 @@ internal static unsafe class InputManager
         if (_pad0 != null)
         {
             var bind = ConfigManager.Game.PadFor(0);
-            Controller.State = PadState(_pad0, bind, Controller.State);
+            Controller.State &= PadButtonsOf(0, PadState(_pad0, bind, 0xFFFF));
             Controller.LeftX = Axis(_pad0, bind.LeftStickX);
             Controller.LeftY = Axis(_pad0, bind.LeftStickY);
             Controller.RightX = Axis(_pad0, bind.RightStickX);
@@ -480,7 +480,7 @@ internal static unsafe class InputManager
         if (_pad1 != null)
         {
             var bind = ConfigManager.Game.PadFor(1);
-            Controller.State2 = PadState(_pad1, bind, Controller.State2);
+            Controller.State2 &= PadButtonsOf(1, PadState(_pad1, bind, 0xFFFF));
             Controller.LeftX2 = Axis(_pad1, bind.LeftStickX);
             Controller.LeftY2 = Axis(_pad1, bind.LeftStickY);
             Controller.RightX2 = Axis(_pad1, bind.RightStickX);
@@ -700,6 +700,16 @@ internal static unsafe class InputManager
         if (_sdl == null || index < 0) return 0x80;
         return AxisToByte(_sdl.GameControllerGetAxis(ctrl, (GameControllerAxis)index));
     }
+
+    //0112. A pad's own buttons (active low, Controller's layout), rewritten by the
+    //game before they join the keyboard's: a face-button convention that follows
+    //the hardware, not the bindings, so the keyboard, the mouse and anything a
+    //port presses itself keep their meaning, and nothing is saved. Runs on the
+    //host thread, in the poll. (port, buttons) -> buttons.
+    public static Func<int, ushort, ushort>? PadButtons;
+
+    private static ushort PadButtonsOf(int port, ushort buttons) =>
+        PadButtons is { } rewrite ? rewrite(port, buttons) : buttons;
 
     private static ushort PadState(GameController* ctrl, GamepadBindings pad, ushort s)
     {
