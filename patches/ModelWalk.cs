@@ -180,6 +180,34 @@ public static class ModelWalk
         return true;
     }
 
+    const uint ModelSlots = 0x8018E1A0;      // u32 a model id: its data in the heap, or 0
+    const uint ModelSlotCount = 0x240;       // to the vertex base at 0x8018EAA0
+
+    /// <summary>
+    /// `func_80032CD8`'s test, made safely: a model id past the 104 static ones is
+    /// resident when its slot is set and the heap block's state byte before it is 1 or
+    /// 2. The slot, and the mesh table it leads to, must also lie in RAM, and the block
+    /// must name this slot as its owner. A model the game's own view never asked about
+    /// can have a slot holding a stale word (issue #85: `0x2421F0FC`), which the game's
+    /// routine dereferences and dies on.
+    /// </summary>
+    internal static bool Resident(PSMemory mem, uint id)
+    {
+        id &= 0xFFFFu;
+        if (id >= ModelSlotCount) return false;
+        uint lo = 0x80000010u, hi = 0x80000000u + RecompOne.Runtime.Runtime.RamSize - 0x10u;
+        uint slot = ModelSlots + id * 4u;
+        uint entry = mem.ReadU32(slot);
+        if (entry < lo || entry >= hi) return false;
+        if (id >= 0x68u)
+        {
+            if (((mem.ReadU8(entry - 0xCu) - 1u) & 0xFFu) >= 2u) return false;
+            if (mem.ReadU32(entry - 4u) != slot) return false;
+        }
+        uint table = entry + mem.ReadU32(entry + 8u);
+        return table >= lo && table < hi;
+    }
+
     /// <summary>The model id being assembled, or -1 outside an assembler call or when
     /// the walk is not the C# one.</summary>
     public static int SubmitModel => _model;
@@ -682,6 +710,7 @@ public static class ModelWalk
 
             uint flags = mem.ReadU32(rec + 0x28u);
             uint mask = (flags & 0x2000u) != 0u ? mem.ReadU8(rec + 3u) | 0x20u : mem.ReadU8(rec + 3u);
+            bool gameSees;
 
             if ((mem.ReadU32(rec + 0x28u) & 0x80000u) != 0u)
             {
@@ -689,6 +718,7 @@ public static class ModelWalk
                 c.A1 = 3u;
                 c.RA = 0x800333F8u;
                 KingsField2.func_80032DE8(c, mem);
+                gameSees = (c.V0 & mem.ReadU8(rec + 3u)) != 0u;
                 if (RenderDistance.Any || ReflectionReach.Any) c.V0 |= RenderDistance.Box(mem, rec + 0x2Cu, 3u) | ReflectionReach.Box(mem, rec + 0x2Cu, 3u);
                 _mirrorOnly = (c.V0 & mem.ReadU8(rec + 3u)) == 0u && PlanarCull.Any && (PlanarCull.Box(mem, rec + 0x2Cu, 3u) & mem.ReadU8(rec + 3u)) != 0u;
                 if ((c.V0 & mem.ReadU8(rec + 3u)) == 0u && !_mirrorOnly) continue;
@@ -698,13 +728,16 @@ public static class ModelWalk
                 c.A0 = rec + 0x2Cu;
                 c.RA = 0x80033268u;
                 KingsField2.func_80032D78(c, mem);
+                gameSees = (c.V0 & mask) != 0u;
                 if (RenderDistance.Any || ReflectionReach.Any) c.V0 |= RenderDistance.Point(mem, rec + 0x2Cu) | ReflectionReach.Point(mem, rec + 0x2Cu);
                 _mirrorOnly = (c.V0 & mask) == 0u && PlanarCull.Any && (PlanarCull.Point(mem, rec + 0x2Cu) & mask) != 0u;
                 if ((c.V0 & mask) == 0u && !_mirrorOnly) continue;
             }
 
-            bool mirrorOnly = _mirrorOnly;
             Interrupts.Poll(c, mem);
+            // Admitted only by the port's own culls: drawn only while resident, and its
+            // slot read only once it is known to be (see Resident).
+            if (!gameSees && !Resident(mem, mem.ReadU8(rec + 1u) + 0x80u)) { _mirrorOnly = false; continue; }
             c.A0 = mem.ReadU8(rec + 1u) + 0x80u;
             c.RA = 0x80033280u;
             KingsField2.func_80032CD8(c, mem);
@@ -752,11 +785,12 @@ public static class ModelWalk
             }
 
             // Bookkeeping, whether or not the model drew: the definition's two
-            // pages and the creature's own model are wanted this frame. Not for a
-            // creature only the mirror sees: what is wanted is what the game loads
-            // and keeps, and the heap is sized for the game's own view. See "The
-            // model heap overran its end" in docs/GAME_INTERNALS.md.
-            if (mirrorOnly) continue;
+            // pages and the creature's own model are wanted this frame. Only for a
+            // creature the game's own query admits, not one only the port's culls do
+            // (the mirror, render distance, reflection reach): what is wanted is what
+            // the game loads and keeps, and the heap is sized for the game's own view.
+            // See "The model heap overran its end" in docs/GAME_INTERNALS.md.
+            if (!gameSees) continue;
             uint def = CreatureDefs + ((mem.ReadU8(rec + 2u) * 15u) << 3);
             mem.WriteU8(sp + 0x198u + mem.ReadU8(def + 7u), 1);
             mem.WriteU8(sp + 0x198u + mem.ReadU8(def + 8u), 1);
@@ -829,7 +863,7 @@ public static class ModelWalk
     {
         // The ordinary model. Bit 1 of the kind byte picks the volume query,
         // which is asked with the definition's own mask.
-        uint seen, mirror;
+        uint seen, mirror, own;
         if ((kindByte & 2u) != 0u)
         {
             uint def = ObjectDefs + (mem.ReadU16(rec + 0x6u) * 24u);
@@ -837,6 +871,7 @@ public static class ModelWalk
             c.A1 = mem.ReadU8(def + 0xCu);
             c.RA = 0x80033900u;
             KingsField2.func_80032DE8(c, mem);
+            own = c.V0;
             if (RenderDistance.Any || ReflectionReach.Any) c.V0 |= RenderDistance.Box(mem, rec + 0x14u, mem.ReadU8(def + 0xCu)) | ReflectionReach.Box(mem, rec + 0x14u, mem.ReadU8(def + 0xCu));
             seen = c.V0;
             mirror = PlanarCull.Any ? PlanarCull.Box(mem, rec + 0x14u, mem.ReadU8(def + 0xCu)) : 0u;
@@ -846,6 +881,7 @@ public static class ModelWalk
             c.A0 = rec + 0x14u;
             c.RA = 0x800337A8u;
             KingsField2.func_80032D78(c, mem);
+            own = c.V0;
             if (RenderDistance.Any || ReflectionReach.Any) c.V0 |= RenderDistance.Point(mem, rec + 0x14u) | ReflectionReach.Point(mem, rec + 0x14u);
             seen = c.V0;
             mirror = PlanarCull.Any ? PlanarCull.Point(mem, rec + 0x14u) : 0u;
@@ -855,9 +891,15 @@ public static class ModelWalk
 
         Interrupts.Poll(c, mem);
         uint model = mem.ReadU16(rec + 0x6u);
-        // Wanted this frame, so loaded and kept -- unless only the mirror sees it,
-        // which draws it only while it is resident (see the creatures').
-        if (!_mirrorOnly)
+        // Wanted this frame, so loaded and kept -- unless only the port's own culls
+        // admit it (the mirror, render distance, reflection reach), which draw it only
+        // while it is resident (see the creatures'). Its slot is read only once it is
+        // known to be: the game never asks about a model outside its own view, and
+        // such a model's slot can hold a stale word (issue #85, "The slot table
+        // holds stale words past the game's view" in docs/GAME_INTERNALS.md).
+        bool gameSees = (own & mem.ReadU8(rec)) != 0u;
+        if (!gameSees && !Resident(mem, model + 0x100u)) { _mirrorOnly = false; return; }
+        if (gameSees)
         {
             mem.WriteU8(sp + 0x58u + model, 1);
             mem.WriteU8(sp + 0x198u + mem.ReadU8(ObjectDefs + model * 24u + 2u), 1);

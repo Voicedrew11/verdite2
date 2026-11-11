@@ -965,7 +965,11 @@ outside it.**
   eye's bit and no assembler bits, so every half goes to `func_8002FECC`, the far
   assembler, which has no clipper. The planar walk's mirrored pass walks the same
   cells. `ModelWalk`'s six visibility queries OR in the added cell's bits, so
-  creatures, objects, effects and sprites standing there are submitted.
+  creatures, objects, effects and sprites standing there are submitted. A creature or
+  object only an added cell admits is drawn only while its model is resident, and
+  never marked wanted: the game would neither load it nor keep its slot current, and a
+  stale slot crashed the walk (issue #85, "The slot table holds stale words past the
+  game's view" in [GAME_INTERNALS.md](GAME_INTERNALS.md)).
 - **The table's end.** `func_8002FECC` and the lit model assembler drop a packet
   whose slot (`SZ/4 + 0xF0`) reaches `0x2000`, about 15.5 tiles of depth. While
   cells are added, such a packet is placed at `0x1FFE` instead: the last slot but
