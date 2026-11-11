@@ -316,6 +316,7 @@ The reverse-engineered game: main loop, player state, stats, death, movement, ar
 - Debug tools
 - The wall slide never leaves a wall it starts in
 - The model heap overran its end
+- The slot table holds stale words past the game's view
 - The Items tab gives through the game's own give, and the names are read live
 - The pickup holds the item up in a loop of its own
 - RETURN is the chooser's last item, and the port settings page takes it

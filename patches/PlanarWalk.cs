@@ -368,7 +368,7 @@ public static class PlanarWalk
                 if (_taken[i] && GpuWorld.MirrorModelsActive) { _instanced++; continue; }
                 // The walk polls interrupts, so the loader may have evicted the model
                 // since the walk tested it.
-                if (!Resident(mem, _regs[i * 4 + 1])) { _gone++; continue; }
+                if (!ModelWalk.Resident(mem, _regs[i * 4 + 1])) { _gone++; continue; }
                 uint sp = _sp[i];
                 if (_regs[i * 4 + 2] >= _walkLo && _regs[i * 4 + 2] < _walkHi)
                     for (int k = 0; k < 12; k++) mem.WriteU8(_regs[i * 4 + 2] + (uint)k, _pos[i * 12 + k]);
@@ -400,21 +400,6 @@ public static class PlanarWalk
     }
 
     static uint _pendingMain;
-
-    const uint ModelTable = 0x8018E1A0;
-
-    /// <summary>`func_80032CD8`'s test: a model id past the 104 static ones is
-    /// resident when its entry is set and the status byte before it is 1 or 2. The
-    /// entry and the mesh table it leads to must also lie in RAM.</summary>
-    static bool Resident(PSMemory mem, uint id)
-    {
-        uint lo = 0x80000010u, hi = 0x80000000u + RecompOne.Runtime.Runtime.RamSize - 0x10u;
-        uint entry = mem.ReadU32(ModelTable + (id & 0xFFFFu) * 4u);
-        if (entry < lo || entry >= hi) return false;
-        if ((id & 0xFFFFu) >= 0x68u && ((mem.ReadU8(entry - 0xCu) - 1u) & 0xFFu) >= 2u) return false;
-        uint table = entry + mem.ReadU32(entry + 8u);
-        return table >= lo && table < hi;
-    }
 
     /// <summary>The mirrored table first, into the planar texture of the target the
     /// game's own table is about to be drawn into.</summary>

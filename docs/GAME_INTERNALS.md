@@ -1763,6 +1763,38 @@ reporter's own RAM dumps were not attached. Whether a boss the game wants fails 
 appear while the guard is refusing loads has not been seen. With the walk's fix
 the guard has not fired.
 
+### The slot table holds stale words past the game's view
+
+Reported 2026-11-07 (issue #85): area 6 (`fdat20`), through the big door below the
+save point after Seath's Sword, crashed with `unmapped address: 0x2421F0F0` in
+`func_80017764` under `func_80032CD8`, reached from `ModelWalk.Ordinary`, with
+*Render distance* at 15 tiles. It is the fault the Noclip note above records ("Noclip's
+hard limit is the loaded area") and fuzz seed 1024 hit, reached a third way.
+
+`func_80032CD8(id)` reads the model's slot in the table at `0x8018E1A0` (576 u32s, to
+the vertex base at `0x8018EAA0`) and, for an id past the 104 static ones, the heap
+block's state byte at `slot - 0xC`. It trusts the slot: a model the game has not asked
+about since its block was freed or moved can still hold the old word. The game never
+asks about such a model, because it queries only what its own view admits, and a block
+it wants is loaded before it is drawn. The port's culls ask about more: render
+distance's added cells, the reflection reach and the planar mirror's cull all admit
+models the game's query does not. Fuzzing at render distance 15 (48 runs, two of them in
+`fdat20`) found 15 such admissions whose slot was non-zero and not a resident block:
+heap addresses of blocks since moved or freed (`0x800B5080`, `0x8009E7FC`, ...), several
+times the same model ids. Pointing into RAM, the game's routine would have read a byte
+from one and drawn whatever was there. In #85 the word pointed outside RAM, so it crashed.
+
+**The fix** (`ModelWalk.Resident`, which `PlanarWalk`'s replay already used for its
+mirror-only models): a creature or object that only the port's culls admit is drawn only
+when its slot is resident. That means the slot lies in RAM, the block's state is 1 or 2,
+the block's owner word (`entry - 4`) names this slot, and the mesh table lies in RAM. It
+is never marked wanted, so it is not loaded either, the rule the heap overrun above
+already set for the mirror. The owner test agreed with the game's own answer on every
+model the game's view admitted: 1.4 million lookups in 12 fuzz runs, 0 disagreements.
+**Not reproduced at the reporter's spot**: the shell's `warp 6` and `goto` there did
+not settle into `fdat20`, and their RAM dump was not attached. The fix is from the
+same routine and the same stale-slot shape.
+
 ### `func_8002C3A8` is the floor-height query
 
 `func_8002C3A8(mode, x, z, radius, /*sp+0x10*/ height)` returns the ground `Y` for
