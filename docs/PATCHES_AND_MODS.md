@@ -12,7 +12,7 @@ lives here — frame pacing and auto reload.
 | `MenuPacing.cs`, `LoopPacing.cs` | run a loop that renders its own frames at the world's rate, and fill the gap by redrawing | this file |
 | `LoadPacing.cs` | makes a `VSync(0)` inside a disc wait cost a vblank again, so the loading screen's figure walks at the console's rate | this file |
 | `MenuWorld.cs` | draws the world live behind a menu or a shop instead of the frozen 320-wide copy | this file |
-| `MessageText.cs`, `MessageGlyphs.cs` | draws sign and dialogue text as text on an opaque box, decoded from the message's own picture (experimental, off) | this file |
+| `text/*.cs` (`Lettering`) | the game's text in new fonts: signs and dialogue redrawn from their US text, menus in normal case, proportional spacing, optional shadows; the `kf2.text` slot mods draw through (was the Text mod) | this file |
 | `SpriteAnim.cs` | steps the billboard sprites' cels once a world tick, so the flames burn at the console's speed | this file |
 | `FrameSmoothing.cs`, `ObjectSmoothing.cs`, `AnimSmoothing.cs`, `FluidSmoothing.cs` | carry the view, everything that moves, MO clip time, and the scrolling textures, between ticks | this file |
 | `DrawCensus.cs` | attributes the frame's primitives to the routine that drew them | [GAME_INTERNALS.md](GAME_INTERNALS.md) |
@@ -3511,72 +3511,99 @@ Measured after both, `(3, 0)`: 768 frames held live until Cross, 60 passes/s,
 fade-out and close. Reported from play before the fix: garbled wall textures behind
 every dialogue and a drop to 4:3 after a few seconds; after it, confirmed from play.
 
-The dim cannot stay a colour on the frame, because nothing is pasted any more:
+The dim cannot stay a colour on the frame, because nothing is pasted any more: a
+message keeps the game's two text quads, over a black `POLY_F4` at 50% once the
+brightness is half up. The console has no multiply, so 50% (mode 0 against black)
+stands in for the 58% the paste reaches. (`MessageText`, since replaced by "The game's
+text in new fonts", drew a message it had decoded itself and laid the dim with it.)
 
-- **A message `MessageText` has decoded** draws no quads at all. The overlay lays black
-  at `(b/2)/0x80` over the whole picture and then its box and text — exactly the paste's
-  `0x80 - b/2`, and over the margin too.
-- **Any other** (the place-name cards) keeps the game's two text quads, over a black
-  `POLY_F4` at 50% once the brightness is half up. The console has no multiply, so 50%
-  (mode 0 against black) stands in for the 58% the paste reaches.
-
-Measured, 16:9, `KF2_FPS=144`, `KF2_MESSAGETEXT_TEST=6:120,3:0`: both fade in over ten
+Measured, 16:9, `KF2_FPS=144`, `KF2_MESSAGETEXT_TEST=6:120,3:0` (now `KF2_TEXT_TEST`): both fade in over ten
 frames of the live world, 18.3% of primitives reaching the margin and about 160
 depth-carrying triangles a frame, the same as the frame before; the card kept the
-game's picture and `(3, 0)` was drawn by the overlay; each stays up until the button,
+game's picture and `(3, 0)` was drawn by `MessageText`'s overlay, since removed; each stays up until the button,
 as with the game's loop (`KF2_MENUWORLD=0` for the comparison). **Not looked at.**
 
-## Drawing message text
+## The game's text in new fonts
 
-**An experiment, off by default (`KF2_MESSAGETEXT=1`; there is no control in the
-window). It shipped on after v0.3.0 and was judged by eye in play and turned back
-off:** only the ~81% of messages that decode completely are replaced, so play mixes
-the game's own lettering with interface-font text on an opaque modern box from one
-sign to the next, and the replacement does not look like the game. See "Judged" at
-the end of this section.
+**On by default** (Video ▸ Text; `KF2_TEXT=0` is the comparison). Brought in whole
+from the Text mod (`kf2.text`) of PerdueEgg's verdite2-mods collection
+(https://github.com/PerdueEgg/verdite2-mods), 2026-11-10, at the
+user's request, with the US script it carries: every sign, dialogue line, description
+and place card is redrawn in new fonts with upper and lower case and proportional
+spacing; the menus, names and the short messages in play are drawn in normal
+capitalisation (`Use Item`, `Short Sword`, `Level up`); drop shadows are optional and
+off. `patches/text/`, entry `Lettering`; the settings page is `settings/TextPage.cs`.
+It replaces `MessageText` (sign text drawn in the interface font on an opaque box,
+judged unwanted and left off), whose files and `scripts/msg_glyphs.py` are gone;
+`KF2_TEXT_TEST` keeps its message opener.
 
-A sign or an NPC line is a 4-bit TIM in `TALK.T` or `ITEM.T` ("Full-screen messages
-are pictures" in [GAME_INTERNALS.md](GAME_INTERNALS.md)), so the text can be no
-sharper than 256×256 at 16 colours. `patches/MessageText.cs` reads the text back out
-of that picture and draws it itself:
+What it does, by file (each file's comment has the detail):
 
-1. **Decode.** A pre on `func_80035684` — the TIM is in RAM and not yet uploaded, and
-   `func_80035B48`'s pre has recorded `(file, entry)` — cuts the image into 8×14 cells
-   from x = 4, lines on a 14-pixel grid whose phase is 3 or 10 (the text is centred on
-   odd and even line counts), thresholds each cell at half the brightest ink colour,
-   and looks up the FNV-1a hash of its 14 row bytes in `patches/MessageGlyphs.cs`. One
-   unknown cell and the message is left to the game.
-2. **Hide.** On a full decode the TIM's palette is zeroed in RAM. Colour `0x0000` is
-   transparent to a textured primitive, so `func_800356F4`'s two text quads draw
-   nothing and nothing in the game's code had to be replaced.
-3. **Draw.** An ImGui panel over the game picture draws an opaque box over the text's
-   rows and each line at its own cell position, in the interface font at 12.5 game
-   pixels, in the line's brightest palette colour. Opacity follows `func_800356F4`'s
-   brightness, which it keeps in `s2` and which a pre on stage 13's presenter
-   `func_8002E0FC` reads while the fade runs.
+| file | what |
+|---|---|
+| `Fonts.cs`, `Spacing.cs`, `FontData.cs`, `Png.cs` | the three fonts (dialogue 8×14, sign 9×18, menu 8×15) as editable character maps, and their spacing and kerning |
+| `FontMaps.cs` | the shipped maps, base64, generated by `scripts/text_fonts.py` |
+| `Disc.cs` | `COM/TALK.T`, `COM/ITEM.T` and `COM/FDAT.T`, read once off the disc the game runs |
+| `Pictures.cs` | a pre on `func_80035684` redraws a message TIM recognised by its fingerprint, in its own palette |
+| `GameText.cs`, `UsText.cs` | the US text as the base layer under any mod's; label casing |
+| `MenuCells.cs` | the lower case and punctuation added to the menu font page, and the number strip's digits |
+| `MenuLabels.cs` | the replace on the label routine `func_80021E10`: casing and proportional placement, each letter drawn by the game's own routine |
+| `HudMessages.cs` | the page of the 36 messages in play, redrawn in the menu font |
+| `Shadow.cs` | the two shadows: under a message picture at stage 13's presenter, under menu quads at `func_80022A28` and the HUD sprite `func_80033D24` |
+| `Lettering.cs` | install, attach (twelve hooks on nine routines), the `kf2.text` slot, `KF2_TEXT_TEST` |
 
-**The glyph table carries no text.** `scripts/msg_glyphs.py` builds it from the disc:
-it cuts every image the same way, reads each with tesseract, lines each OCR line up
-against the line's non-empty cells when the counts agree, and takes the majority vote
-per cell. OCR errors are outvoted — the single image tesseract read as `equi pment` and
-`ie.` decodes as `equipment` and `die.` Measured: 111 glyphs; 551 of the 585 images
-on the grid decode completely; the other 94 of the 679 are a second, bolder font, the
-centred place-name cards and box drawing, and stay pictures. `--dump DIR` writes the
-decoded text for proofreading, and is not to be committed.
+The game's layouts it relies on are under "The menu font is a VRAM page, and the
+messages in play are another" in [GAME_INTERNALS.md](GAME_INTERNALS.md).
 
-`KF2_MESSAGETEXT_TEST=3:0,6:360` opens those messages through `func_80035B48` from
-the main loop's stage 9, ten seconds in, with `KF2_AUTOPAD` to dismiss them — the
-command channel cannot reach an NPC. Measured, 16:9 at 144 fps: `(3, 0)`, `(6, 360)`
-and `(6, 240)` decoded to the same text as the offline dump, `(6, 120)` (a place-name
-card) was left to the game, and the panel drew 126 frames of `(3, 0)` at full opacity.
+**Mods still draw through it.** The process data slot `kf2.text` holds the same
+dictionary of delegates the mod published (`Lettering.Api`), so a mod's `TextApi.cs`
+(Retranslation, Shortcuts, Japanese Disc) works unchanged. A mod that lists
+`"kf2.text"` under `dependencies` is skipped by the loader, which knows no mod by that
+id any more: the line has to come out of its `mod.json`. If the Text mod itself is
+installed and enabled, `Lettering` attaches nothing and says so, rather than both
+owning the replace on `func_80021E10`.
 
-**Judged** (2026-09-22, from play): the replaced messages read as an Arial-like font
-on a very modern box and are not wanted, and the mix with the undecoded ones (which
-stay the game's picture) is worse than either alone. Anything that comes back here
-would have to draw in the game's own glyphs, and at that point it adds nothing the
-TIM does not already show. Placement and the fade were never judged. Behind it is the live world
-when `MenuWorld` is on ("Messages draw the world live"), and the dim is then this
-panel's; with it off, the game's 1x `MoveImage` copy.
+**The fonts folder** is `fonts/` in the data directory (the repository root for a dev
+run, gitignored). A font with no map there gets the port's own, written from
+`FontMaps.cs`; *Restore the port's fonts* writes them over the folder's, and *Rebuild
+from the disc* cuts the game's own letters, as the mod did. To change the shipped fonts,
+edit the folder's and run `python3 scripts/text_fonts.py fonts/`.
+
+What changed on the way in, beyond the plumbing (`HookAttach`, `PatchSettings`, the
+mod's `kf2.text.*` keys kept so a player's choices carry over):
+
+- **The disc read the wrong image.** The mod opened `Runtime.CdPath`, the saved disc,
+  before the command line's, and `Entry.Run` takes the command line's first. With the
+  two different, the mod read another disc and lettered nothing (`directory not found:
+  CD`). `Disc.DiscPath` takes the command line first.
+- **`sign_spacing.json` had a trailing comma**, so the mod read none of it and used its
+  defaults: the same numbers, less the apostrophe's one clear pixel, which now applies.
+  The JSON is read with trailing commas allowed, and `text_fonts.py` refuses bad JSON.
+- **The PORT SETTINGS page's words** are read off `PortSettings` the first time a label
+  is cased, so a new row is title-cased without a list to keep
+  (`GameText.HarvestPortSettings`). A dimmed row there recoloured every quad its label
+  drew, which would have turned a menu shadow grey; `SettingsPage.Label` skips them.
+- **The gear comparison** (`MenuDraw.DrawText`, C# that never calls the label routine)
+  lays its letters out through `MenuLabels.Lay` and shadows them as the game's labels
+  are, so the panel matches the menus around it, and `KF2_GEARCOMPARE=verify` still
+  compares like with like: both sides go through the same layout.
+- **The settings window's thread** only flips switches; what a hook reads that needs
+  rebuilding (the messages page, a rebuild or restore of the maps) is queued to the
+  game thread through `Lettering.Post` and drained after stage 9.
+
+Measured (2026-11-10, `KF2_TEXT_PROBE=1`): every hook committed; the maps written from
+`FontMaps.cs` and read back (dialogue 82 letters, sign 82, menu 83); the menu font's
+added cells, the number strip and the messages page uploaded once in play;
+`KF2_TEXT_TEST=3:0,6:360` redrew `(3, 0)` as five dialogue lines and `(6, 360)`, matched
+by fingerprint as its identical twin `(6, 377)`; opening the menu and PORT SETTINGS
+over the shell cased every label (`Use Item`, `STR Power`, `Port Settings`, `HUD at
+Edges`, `960p`) and left `HP`, `MP`, `16/9` and numbers alone. With the Retranslation
+mod enabled (its dependency line removed) it found the slot, and `(3, 0)` drew its
+four-line wording; with the Text mod enabled too, this stood down.
+`KF2_FPS=144 KF2_FPS_PROBE=1`: 144.0 fps drawn at 15.0 ticks/s; `scripts/fuzz.py --runs
+12`: no findings. **Not run:** the gear comparison's verify (no equip prompt reachable
+from the shell). **The picture was judged on the mod, not on this port of it**; the gear
+comparison's new lettering has not been looked at.
 
 ## Pausing when the window loses focus
 
@@ -3642,7 +3669,7 @@ many vblanks a step, and the pad is still read once a step, as the game reads it
 message `MenuWorld` takes is held; one left to the game's loop keeps the game's speed.
 x1 is the default, the game's own.
 
-Measured (`KF2_AUTOSTART=2 KF2_MESSAGETEXT_TEST=3:0 KF2_MENUWORLD_PROBE=1`, Cross over
+Measured (`KF2_AUTOSTART=2 KF2_MESSAGETEXT_TEST=3:0 KF2_MENUWORLD_PROBE=1`, the opener now `KF2_TEXT_TEST`, Cross over
 the shell): at x1 the fade-in was 10 step draws, 10 `VSync`s, 143 ms, and the fade-out
 7, 7, 117 ms, so a step is one vblank here as in Verdite3; at x2, 20 and 14 `VSync`s,
 310 and 233 ms. A fade-out that runs out returns the button test's state, -1 until every

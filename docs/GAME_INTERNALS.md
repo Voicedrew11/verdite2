@@ -1382,6 +1382,42 @@ exactly where the placeholders say, and slot 2 reads `0  x1  DAGGER` and nothing
 else — which is also what `func_8004905C`, the new-game setup, writes: `inv[0] =
 1` after clearing.
 
+### The menu font is a VRAM page, and the messages in play are another
+
+Read from the Text mod's source (verdite2-mods, `mods/text`) when it was brought into
+the port as `patches/text/` (2026-11-10); the uploads and the casing were measured
+here, the layouts below were not re-derived.
+
+- **The label font** is a 4-bit page at VRAM (832, 256), its palette at (576, 509),
+  both uploaded from `COM/FDAT.T` entry 47 (a run of blocks: `x, y, w, h` twice, then
+  the pixels). Cell `g` is 8×15 at `u = (g & 15) * 8`, `v = (g >> 4) * 15`; the disc
+  fills rows 0-3 (`A`-`Z` at 0x00, digits at 0x20, `.,'-=/*#!■?` at 0x30); 0x7F is a
+  space and 0xFF ends a string. Rows 4-6 are free, which is where the Text feature puts
+  lower case (0x41-0x5A) and `( ) : ; & " + %` and two arrows.
+- **The label routine** `func_80021E10(template, rec)` draws a record (`s16 x, s16 y`,
+  then cells to 0xFF, at most 24) a cell every 7 pixels, each a `POLY_FT4` linked onto
+  slot 10 through `func_80022A28(slot)`. Templates: labels `0x80064BF0`, numbers
+  `0x80064BE4`.
+- **The numbers** (`func_80021FCC`: levels, HP, gold, counts) come from a strip of two
+  7-wide columns at `u` 240: digits 0-9 at `v = d * 15`, and the signs drawn beside
+  numbers (`C E G L M P V X x /`) in the second, sign `s` at `v = (s - 11) * 15`.
+- **The status page's Condition** values are six 24-byte slots from `0x8006580C`
+  (PARALYZE .. GOOD), each padded to ten cells to right-align it in the fixed spacing.
+- **The messages in play** (LEVEL UP, LOCKED, 36 GOLD, ...) are not text: one 4-bit
+  page at VRAM (704, 256), palette (576, 508), from the same FDAT.T entry, two columns
+  of 128 pixels by eighteen rows of 14, message `i` at column `i / 18`, row `i % 18`.
+  `func_80033F08(id, value)` queues one; `func_80033FBC` points the first sprite record
+  at `0x800676F4` (18 bytes: on, u, v, w, h, then `s16` x, y, w, h, clut, tpage) at its
+  cell, 127×14 at (96, 203). GOLD (21) uses the second record, at x 160, beside four
+  digit sprites from the number strip, so it is the one message drawn from the cell's
+  left edge. `func_80033E78` draws each record that is on through
+  `func_80033D24(rec, blend, rgb)`, subtractive (`0x40`) then additive (`0x20`), onto
+  slot 1.
+- **A message picture's fade** (`func_800356F4`) draws the TIM twice a frame at
+  brightness `b`, subtractive on slot 1 then additive on slot 0, with the CLUT at
+  (576, 511) and the quad's top-left at (32, 10); the letters' colours are
+  semi-transparent and the background colour transparent.
+
 ## Saving and loading
 
 Both halves of the memory card now work. Saving was confirmed first — three files

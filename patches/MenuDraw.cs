@@ -59,18 +59,20 @@ public static class MenuDraw
     }
 
     // func_80021E10. A space draws the cell at 0x7F; an empty string draws
-    // nothing; at most 24 quads (the x step stops at 168).
+    // nothing; at most 24 quads (the x step stops at 168). With the Text feature
+    // on, the letters are its: cased, spaced and shadowed as it draws a label the
+    // game built on its stack (Text.MenuLabels.Lay), so KF2_GEARCOMPARE=verify
+    // still compares like with like.
     public static void DrawText(IMemory m, int x, int y, string s)
     {
-        int step = 0;
-        foreach (char ch in s)
+        var cells = new List<byte>(s.Length);
+        foreach (char ch in s) cells.Add((byte)GlyphOf(ch));
+        foreach (var (cell, X) in Text.MenuLabels.Lay(m, cells, x))
         {
-            if (step >= 168) break;
-            int g = GlyphOf(ch) & 0x7F;
+            int g = cell & 0x7F;
             uint p = NewQuad(m);
             int w = (short)m.ReadU16(TextTemplate + 8);
             int h = (short)m.ReadU16(TextTemplate + 0xA);
-            int X = x + step;
 
             m.WriteU16(p + 0x08, (ushort)X);
             m.WriteU16(p + 0x0A, (ushort)y);
@@ -98,7 +100,7 @@ public static class MenuDraw
             m.WriteU8(p + 0x25, (byte)(v + vh));
 
             Link(m, p, 10);
-            step += 7;
+            if (Text.Lettering.Active) Text.Shadow.Under(m, p, 10);
         }
     }
 

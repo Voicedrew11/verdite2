@@ -86,8 +86,7 @@ public static class MenuWorld
     static int _depth;
     static bool _drawing;
 
-    /// <summary>A message box is being drawn over the live world, so its dim is the
-    /// overlay's to draw (<see cref="MessageText"/>) when the text is.</summary>
+    /// <summary>A message box is being drawn over the live world.</summary>
     public static bool MessageLive { get; private set; }
     static int _messages, _messagesRefused;
 
@@ -297,9 +296,8 @@ public static class MenuWorld
     ///
     /// The game's step is stage 13's head, four quads, `DrawSync`, stage 13's presenter.
     /// Here the world pass runs into its own table ahead of the message's, and the two
-    /// quads that pasted the dimmed frame are gone. A message <see cref="MessageText"/>
-    /// has decoded draws nothing at all -- the overlay dims and writes -- and any other
-    /// keeps the game's two text quads over a 50% black quad.
+    /// quads that pasted the dimmed frame are gone: the game's two text quads are kept
+    /// over a 50% black quad.
     /// </summary>
     public static void MessageFade(Action<CpuContext, IMemory> orig, CpuContext c, IMemory m)
     {
@@ -374,8 +372,7 @@ public static class MenuWorld
         if (_probe)
             Console.WriteLine($"[KF2] menu world: message fade {step:+0;-0} over the live world, x{FadeVBlanks}: " +
                               $"{fadeFrames} step draw(s), {fadeVsyncs} VSync(s) in {fadeMs:0} ms, {frames} frame(s) in all" +
-                              (frames > fadeFrames ? " (held for the button)" : "") + $", returns {(int)result}, " +
-                              $"{(MessageText.Covering ? "text drawn by the overlay" : "the game's picture kept")}");
+                              (frames > fadeFrames ? " (held for the button)" : "") + $", returns {(int)result}");
         c.Restore(saved);
         c.V0 = result;
     }
@@ -386,14 +383,14 @@ public static class MenuWorld
     {
         KingsField2.func_8002E064(c, mem);                      // head: flip, OT, descriptor
         uint ot = mem.ReadU32(OtPointer);
-        if (!MessageText.Covering) MessageQuads(mem, ot, b);
+        MessageQuads(mem, ot, b);
 
         uint head = DrawWorld(c, mem, ot + (OtEntries - 1u) * 4u);
 
         c.A0 = 0u;
         KingsField2.func_800605A4(c, mem);                      // DrawSync(0)
         mem.WriteU32(OtPointer, head - (OtEntries - 1u) * 4u);
-        c.S2 = (uint)b;                                          // MessageText reads it here
+        c.S2 = (uint)b;                                          // where the game's fade holds it
         var clear = WorldClear(mem);
         KingsField2.func_8002E0FC(c, mem);                      // stage 13's presenter
         RestoreClear(mem, clear);
