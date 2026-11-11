@@ -371,9 +371,9 @@ Kf2.Text.Lettering.Configure(Environment.GetEnvironmentVariable("KF2_TEXT"),
 Kf2.Text.Lettering.Install();
 
 // The Retranslation: a new English translation from the Japanese release, drawn by the
-// lettering above (PORT SETTINGS > GAMEPLAY > TRANSLATION). See "The Retranslation" in
+// lettering above, always in its modern font (PORT SETTINGS > GAMEPLAY > LANGUAGE). See "The Retranslation" in
 // docs/PATCHES_AND_MODS.md.
-//     KF2_RETRANSLATION=0|1    the TRANSLATION row for this run
+//     KF2_RETRANSLATION=0|1    the Retranslation, or not, for this run
 Kf2.Retranslation.Retranslation.Configure(Environment.GetEnvironmentVariable("KF2_RETRANSLATION"));
 Kf2.Retranslation.Retranslation.Install();
 

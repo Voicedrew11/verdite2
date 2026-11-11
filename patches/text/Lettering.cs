@@ -79,10 +79,19 @@ public static class Lettering
     /// shadows, the redrawn pictures), CLASSIC the game's own letters, as with KF2_TEXT=0
     /// but switchable in play. This is the choice; the hooks read <see cref="Drawing"/>,
     /// which follows it on the game thread at the next label or main-loop frame, where the
-    /// font pages are put back (<see cref="FollowFont"/>). A sign already shown keeps
+    /// font pages are put back (<see cref="FollowFont"/>). The Retranslation as the language
+    /// overrides CLASSIC (<see cref="WantModern"/>). A sign already shown keeps
     /// its letters until the next one. Stored as 0 (classic) or 1 (modern).
     /// </summary>
     public static bool Modern { get; set; } = true;
+
+    /// <summary>The font the hooks should follow: MODERN, or the Retranslation as the
+    /// language, which is always drawn in the port's font.</summary>
+    static bool WantModern => Modern || Retranslation.Retranslation.On;
+
+    /// <summary>The font the game thread has applied (<see cref="WantModern"/> as of the last
+    /// <see cref="FollowFont"/>): what the font pages are built in. Game thread.</summary>
+    public static bool ModernApplied => _modernApplied;
 
     /// <summary>The port's fonts are drawing: every hook committed and MODERN applied.</summary>
     public static bool Drawing => Active && _modernApplied;
@@ -134,7 +143,7 @@ public static class Lettering
             GameText.NormalCase = view.GetBool(CaseKey, true);
             GameText.SetPictures(view.GetBool(PicturesKey, true));
             Modern = _forcedFont ?? view.GetInt(FontKey, 1) != 0;
-            _modernApplied = Modern;
+            _modernApplied = WantModern;
         });
         HookAttach.OnOverlayLoad("text", Attach);
     }
@@ -198,7 +207,7 @@ public static class Lettering
 
         _hooked = all.All(HookAttach.Installed);
         Console.WriteLine(_hooked
-            ? $"[KF2] text: on; font {(Modern ? "modern" : "classic")}, pictures {(GameText.ShowPictures ? "redrawn" : "the disc's")}, " +
+            ? $"[KF2] text: on; font {(WantModern ? "modern" : "classic")}, pictures {(GameText.ShowPictures ? "redrawn" : "the disc's")}, " +
               $"{(GameText.NormalCase ? "normal case" : "capitals")}, fonts in {Fonts.Folder}"
             : "[KF2] text: not every hook committed; retrying on the next overlay load");
         return _hooked;
@@ -300,11 +309,12 @@ public static class Lettering
     /// the font pages are put up again in its letters before this frame's labels are drawn.</summary>
     static void FollowFont(CpuContext c, IMemory m)
     {
-        if (Modern == _modernApplied) return;
-        _modernApplied = Modern;
+        bool want = WantModern;
+        if (want == _modernApplied) return;
+        _modernApplied = want;
         MenuCells.Invalidate();
         HudMessages.Invalidate();
-        Console.WriteLine($"[KF2] text: font {(Modern ? "modern" : "classic")}");
+        Console.WriteLine($"[KF2] text: font {(want ? "modern" : "classic")}");
         try { MenuCells.UploadOnce(c, m); }
         catch (Exception e) { Console.WriteLine($"[KF2] text: font: {e.Message}"); }
         if (Japanese.JapaneseDisc.Active) return;

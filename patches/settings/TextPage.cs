@@ -33,14 +33,20 @@ public sealed class TextPage : IPatchPage
             return;
         }
 
-        int font = Lettering.Modern ? 1 : 0;
+        bool retranslated = Retranslation.Retranslation.On;
+        bool modern = Lettering.Modern || retranslated;
+        int font = modern ? 1 : 0;
+        if (retranslated) ImGui.BeginDisabled();
         if (ImGui.Combo("Font", ref font, "Classic\0Modern\0"))
         {
             Lettering.Modern = font == 1;
             PatchSettings.Set(Lettering.FontKey, font);
         }
-        Tip("Modern: the port's lettering below. Classic: the game's own letters, and the switches below do nothing. Also PORT SETTINGS > GAMEPLAY > FONT.");
-        if (!Lettering.Modern) ImGui.BeginDisabled();
+        if (retranslated) ImGui.EndDisabled();
+        Tip(retranslated
+            ? "The Retranslation is the language, and it is always drawn in the Modern font."
+            : "Modern: the port's lettering below. Classic: the game's own letters, and the switches below do nothing. Also PORT SETTINGS > GAMEPLAY > FONT.");
+        if (!modern) ImGui.BeginDisabled();
 
         bool pictures = GameText.ShowPictures;
         if (ImGui.Checkbox("Signs and dialogue in the new fonts", ref pictures))
@@ -91,7 +97,7 @@ public sealed class TextPage : IPatchPage
             PatchSettings.Set(Lettering.ShadowMenusKey, shadowMenus);
         }
         Tip("The same for menu labels, numbers and the short messages in play.");
-        if (!Lettering.Modern) ImGui.EndDisabled();
+        if (!modern) ImGui.EndDisabled();
 
         ImGui.TextDisabled($"Fonts: {Fonts.Status}");
         ImGui.TextWrapped($"Character maps: {Fonts.Folder}");
@@ -116,8 +122,8 @@ public sealed class TextPage : IPatchPage
 
     static bool _showNotes;
 
-    /// <summary>The Retranslation's choice, its three parts (the mod's switches and keys)
-    /// and the workbook. A change is picked up by the game thread at its next frame.</summary>
+    /// <summary>The Retranslation's three parts (the mod's switches and keys) and the
+    /// workbook; choosing it is the Language row's. A change is picked up by the game thread at its next frame.</summary>
     static void DrawRetranslation()
     {
         ImGui.Separator();
@@ -127,29 +133,18 @@ public sealed class TextPage : IPatchPage
             ImGui.TextDisabled("The Retranslation mod is enabled in the Mods panel, so it carries the text and these do nothing.");
             return;
         }
-        bool usable = Retranslation.Retranslation.Usable && Lettering.Modern;
-        if (!usable) ImGui.BeginDisabled();
-        int on = Retranslation.Retranslation.On ? 1 : 0;
-        if (ImGui.Combo("Translation", ref on, "Original\0New\0"))
-        {
-            Retranslation.Retranslation.On = on == 1;
-            PatchSettings.Set(Retranslation.Retranslation.OnKey, on);
-        }
-        Tip("New: a new English translation made from the Japanese release (the Retranslation mod by PerdueEgg). " +
-            "Also PORT SETTINGS > GAMEPLAY > TRANSLATION.");
-        if (!Retranslation.Retranslation.On) ImGui.BeginDisabled();
+        ImGui.TextDisabled(Retranslation.Retranslation.On
+            ? "The Retranslation is the language (Gameplay > Language, PORT SETTINGS > GAMEPLAY > LANGUAGE)."
+            : "Choose Retranslation as the language (Gameplay > Language) to use these.");
+        bool on = Retranslation.Retranslation.On && Retranslation.Retranslation.Usable;
+        if (!on) ImGui.BeginDisabled();
         Part("Signs, dialogue and descriptions", Retranslation.Retranslation.PicturesKey,
              () => Retranslation.Retranslation.Pictures, v => Retranslation.Retranslation.Pictures = v);
         Part("Menus, item, equipment and magic names, and messages in play", Retranslation.Retranslation.StringsKey,
              () => Retranslation.Retranslation.Strings, v => Retranslation.Retranslation.Strings = v);
         Part("Encyclopedia names, titles and cards (with the Encyclopedia mod)", Retranslation.Retranslation.EncyclopediaKey,
              () => Retranslation.Retranslation.Encyclopedia, v => Retranslation.Retranslation.Encyclopedia = v);
-        if (!Retranslation.Retranslation.On) ImGui.EndDisabled();
-        if (!usable)
-        {
-            ImGui.EndDisabled();
-            ImGui.TextDisabled("Needs the Modern font, in English.");
-        }
+        if (!on) ImGui.EndDisabled();
         DrawWorkbook();
     }
 

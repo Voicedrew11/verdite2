@@ -3545,7 +3545,8 @@ the game thread at the next label drawn or main-loop frame (the page is in a men
 the main loop does not run). On the switch the menu font's two areas and the messages
 page are uploaded again, from the disc's page on CLASSIC (`MenuCells`/`HudMessages`
 `Pixels`), and the label, shadow and picture hooks pass through; a sign already on screen
-keeps its letters until the next one. Measured headless, both languages, the menu open:
+keeps its letters until the next one. With the Retranslation as the language, MODERN is
+drawn whatever FONT holds ("The Retranslation"). Measured headless, both languages, the menu open:
 classic, modern, classic, each logged with its uploads, no exception. The pictures by eye:
 not checked.
 
@@ -3619,9 +3620,11 @@ comparison's new lettering has not been looked at.
 
 ## The Retranslation
 
-**Off by default; a player's choice** (PORT SETTINGS ▸ GAMEPLAY ▸ TRANSLATION, ORIGINAL
-or NEW, live; the *Translation* section of Video ▸ Text; `kf2.retranslation.on`;
-`KF2_RETRANSLATION=0|1`). Brought in from the Retranslation mod (`kf2.retranslation`) of
+**Off by default; a player's choice**: the second of three languages on PORT SETTINGS ▸
+GAMEPLAY ▸ LANGUAGE (ENGLISH, RETRANSLATION, JAPANESE; the Settings window's Gameplay ▸
+*Language*), live, unlike JAPANESE, which waits for the next start; its parts and the
+workbook in the *Translation* section of Video ▸ Text; `kf2.retranslation.on`;
+`KF2_RETRANSLATION=0|1`. Brought in from the Retranslation mod (`kf2.retranslation`) of
 PerdueEgg's verdite2-mods (https://github.com/PerdueEgg/verdite2-mods, `mods/retranslation`,
 at `12df02b`), 2026-11-11, at the user's request: a new English translation made from the
 Japanese release, for every sign, dialogue line, description and place card, the menus,
@@ -3649,9 +3652,18 @@ What changed on the way in:
   (from both of Lettering's hooks, so PORT SETTINGS, which is a menu with no main loop,
   takes effect at once) applies the difference, and an Import hands its tables over for it
   to install.
-- **When it applies.** NEW, the port's lettering drawing (FONT MODERN), an English run,
-  and the Retranslation mod not enabled; otherwise the game's text is put back. The row is
-  dimmed while it cannot apply. A Japanese run keeps the Japanese disc's own text.
+- **One LANGUAGE row, two keys.** The row's value is 0 English, 1 Retranslation, 2
+  Japanese, kept as `verdite.language` (`ja` or none) and `kf2.retranslation.on` (1 or
+  none), so Verdite Core's language choice and the launcher read what they always read.
+  Choosing one clears the other.
+- **It is always in the new font.** While the Retranslation is the language, `Lettering`
+  draws MODERN whatever FONT holds (`Lettering.WantModern`), and FONT shows MODERN, dimmed;
+  back to English, FONT's own choice returns. The font pages read the font the game thread
+  applied (`Lettering.ModernApplied`), not FONT's value: reading FONT, a stored CLASSIC
+  uploaded the disc's letters under the Retranslation and its menu strings stayed capitals.
+- **When it applies.** The Retranslation chosen, the port's lettering on, a run that is
+  not Japanese, and the Retranslation mod not enabled; otherwise the game's text is put
+  back. A Japanese run keeps the Japanese disc's own text until the next start.
 - **The movies are not taken**: the mod's Movies table fed the Japanese Disc mod's
   re-lettering of the movie cards, which the port does not take ("The title and the
   movies" in JAPANESE.md).
@@ -3661,9 +3673,10 @@ What changed on the way in:
 
 Measured (2026-11-11, headless, `KF2_AUTOSTART=2 KF2_TEXT_PROBE=1 KF2_TEXT_TEST=3:0`):
 with NEW, `(3, 0)` is redrawn as 4 lines (the Retranslation's wording), with ORIGINAL as 5
-(the US text). Over the shell's settings session, stepping TRANSLATION to NEW and saving
-wrote the 202 menu strings in lower case in play, and back to ORIGINAL put them back, no
-exception. `scripts/fuzz.py --runs 12` with `KF2_RETRANSLATION=1`: 240,000 frames, no findings.
+(the US text). Over the shell's settings session, with FONT stored CLASSIC: LANGUAGE to
+RETRANSLATION switched the font to modern, uploaded the port's letters and wrote the 202
+menu strings in lower case, with FONT refused as not usable; on to JAPANESE put the strings
+back and the font to classic; back to ENGLISH left it classic. No exception. `scripts/fuzz.py --runs 12` with `KF2_RETRANSLATION=1`: 240,000 frames, no findings.
 **Not looked at:** the menus, the code-built labels and the messages in play in the new
 text; the wording itself was the mod's, judged there.
 

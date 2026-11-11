@@ -7,8 +7,8 @@ namespace Kf2.Retranslation;
 
 /// <summary>
 /// A new English translation made from the Japanese release, from the Retranslation
-/// mod (kf2.retranslation) of PerdueEgg's verdite2-mods. PORT SETTINGS ▸ GAMEPLAY ▸
-/// TRANSLATION, ORIGINAL or NEW, live. All the lettering is <see cref="Lettering"/>'s;
+/// mod (kf2.retranslation) of PerdueEgg's verdite2-mods. The second of three languages on
+/// PORT SETTINGS ▸ GAMEPLAY ▸ LANGUAGE (ENGLISH, RETRANSLATION, JAPANESE), live. All the lettering is <see cref="Lettering"/>'s;
 /// this carries only the text (Script.cs), in three parts, each with a switch on
 /// Video ▸ Text:
 ///
@@ -23,10 +23,11 @@ namespace Kf2.Retranslation;
 /// The text is Script.cs's, or the Mod EN column of a workbook in the data directory's
 /// retranslation/ folder (Workbook.cs): read at start, and again on Import.
 ///
-///     KF2_RETRANSLATION=0|1    the TRANSLATION row for this run
+///     KF2_RETRANSLATION=0|1    the Retranslation, or not, for this run
 ///
-/// It applies only while the port's lettering draws (FONT MODERN), in English, and with
-/// the Retranslation mod not enabled; otherwise the game's text is put back.
+/// It is always drawn in the port's font: while it is the language, Lettering draws
+/// MODERN whatever FONT says. It applies only in a run that is not Japanese, with the
+/// lettering on and the Retranslation mod not enabled; otherwise the game's text is put back.
 ///
 /// Threads: <see cref="Follow"/>, <see cref="BeforeLabel"/> and <see cref="AfterLabel"/>
 /// run on the game thread, from Lettering's label replace and main-loop post. The
@@ -43,7 +44,8 @@ public static class Retranslation
     public const string EncyclopediaKey = "kf2.retranslation.encyclopedia";
     public const string WorkbookKey = "kf2.retranslation.workbook";
 
-    /// <summary>The TRANSLATION row: NEW is true. Stored as 0 or 1, absent is ORIGINAL.</summary>
+    /// <summary>The Retranslation is the language (LANGUAGE ▸ RETRANSLATION). Stored as 1,
+    /// absent otherwise.</summary>
     public static bool On { get; set; }
 
     // The parts, the mod's own switches and keys (Video ▸ Text).
@@ -61,7 +63,7 @@ public static class Retranslation
     /// <summary>The Retranslation mod is enabled in the Mods panel, so it carries the text.</summary>
     public static bool StoodDown => ModEnabled();
 
-    /// <summary>The row can take effect: the port's lettering is on, the run is in English
+    /// <summary>It can take effect: the port's lettering is on, the run is not Japanese
     /// and the mod is not doing the same.</summary>
     public static bool Usable =>
         Lettering.Enabled && !Lettering.StoodDown && !StoodDown && !Japanese.JapaneseDisc.Active;
