@@ -318,6 +318,8 @@ VERDITE2_SETUP=1                         # the launcher shows the first-run setu
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_SLOT=0   # reload the last save on death
 KF2_FOCUS_PAUSE=0                        # keep running and sounding while the window has no focus (on by default, off for a run KF2_SHELL, KF2_AUTOPAD, KF2_AUTOSTART or KF2_AGENT drives; Gameplay ▸ Pause in the background, kept as kf2.focuspause.on; the variable wins)
 KF2_GEARCOMPARE=0                        # no stat comparison on the equip and buy prompts (on by default; Gameplay ▸ Compare gear)
+KF2_CURSORMEMORY=0|1                     # menu pages open on the last entry highlighted, or on what is equipped (off; Gameplay ▸ Cursor memory, kept as kf2.cursormemory.on); "Cursor memory" in docs/PATCHES_AND_MODS.md
+KF2_CURSORMEMORY_PROBE=1                 # a line for every menu cursor recorded or placed
 KF2_NPCDIALOGUE=0|1                      # NPC conversations as KF3's: Interact goes to the next line, Cancel ends it (off; Gameplay ▸ NPC dialogue, kept as kf2.npcdialogue.on); "NPC dialogue" in docs/PATCHES_AND_MODS.md
 KF2_GEARCOMPARE=verify                   # draw each panel through the recompiled menu routines too and compare every byte; a line a second
 KF2_ENEMYTURN=2                          # 1-8: how fast creatures turn at the player, a multiple of the game's own (speed x k, acceleration x k^2); Gameplay ▸ Enemy turn speed, kept as kf2.enemyturn; the variable wins

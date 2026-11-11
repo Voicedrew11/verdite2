@@ -3949,6 +3949,42 @@ slot 2. The panel itself was judged by eye as the mod; the prompt is not reachab
 from the command channel (`press` does not reach the menu's Up/Down), so the
 patch's picture and its verify line on a real prompt are the user's to check.
 
+## Cursor memory
+
+**Off by default; measured in the menus, not judged in play.** King's Field III's menu
+cursors: the Items page and the Magic page open on the entry last highlighted, and
+every Equipment sub menu (weapon, armour, accessories, attack magic, the second slot)
+opens on what is equipped; an empty slot opens on the first row, as the game does.
+Gameplay ▸ *Cursor memory*, with the mod's three parts under it (Items, Magic,
+Equipment, all on); PORT SETTINGS ▸ GAMEPLAY ▸ CURSOR MEMORY; `kf2.cursormemory.on`,
+`KF2_CURSORMEMORY=0|1`, `KF2_CURSORMEMORY_PROBE=1` a line for each cursor recorded or
+placed. Brought in from the Cursor Memory mod (`kf2.cursormemory`) of PerdueEgg's
+verdite2-mods (https://github.com/PerdueEgg/verdite2-mods, `mods/cursor-memory`, at
+`12df02b`), 2026-11-11, at the user's request; `patches/CursorMemory.cs`, entry
+`CursorMemory`. The logic is the mod's; the class comment carries its reading of the
+list descriptor and each page's routines and call sites.
+
+- **By id, not by row.** The cursor is remembered as the item or spell it was on, so it
+  follows the entry when the list changes; a gone entry leaves it on the same row.
+- **Set where the page loads its preview.** The Items, gear and second-slot pages load
+  the highlighted item's model once with `func_80022CAC(ids[cursor])`; the cursor is
+  placed in a pre there and the call pointed at the placed entry, so the preview matches.
+  The magic pages have no preview, and are placed before their first step.
+- **Ordered around MenuMouse**, which hooks the same step `func_8001EB70`: the placing
+  pre runs before MenuMouse's (`order` -10), so MenuMouse takes the placed cursor as the
+  one it came in with, and the recording post after its post (10), after a click has
+  moved the cursor.
+- **The keys are the mod's** for the three parts; the switch is new (`.on`). It stands
+  down while the mod is enabled, and its controls are dimmed.
+
+Measured 2026-11-11, slot 2 in fdat05, through `KF2_SHELL`'s `press` and `point` with
+the probe on: the Items page recorded id `0x43` at entry 0, the pointer moved it to
+`0x4A` at entry 2, and the page reopened on entry 2 with MenuMouse reading cursor 2; the
+weapon sub menu opened on the equipped id `0x01`, entry 1 of 3 (the game's is entry 0).
+`scripts/fuzz.py --runs 12 --env KF2_CURSORMEMORY=1`: 240,000 frames, no findings. **Not
+reached**: the Magic page with a spell in it (slot 2 knows none), attack magic and the
+second slot with something equipped. Ships off until it is played.
+
 ## NPC dialogue
 
 **Off by default; mechanism attached, never played in the port.** King's Field III's

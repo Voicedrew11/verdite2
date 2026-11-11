@@ -301,6 +301,13 @@ public static class PortSettings
         Gameplay, "COMPARE GEAR", () => GearCompare.Enabled, v => GearCompare.Enabled = v, true,
         tip: "Choosing equipment or browsing a shop shows every stat the item would change, now and after.");
 
+    /// <summary>Menu pages open where they were left, or on what is equipped, as King's
+    /// Field III's. Its three parts stay in the Settings window.</summary>
+    public static readonly PortSetting CursorMemoryOn = Switch(CursorMemory.OnKey, "KF2_CURSORMEMORY", "Cursor memory",
+        Gameplay, "CURSOR MEMORY", () => CursorMemory.Enabled, v => CursorMemory.Enabled = v, false,
+        tip: "The Items and Magic pages open on what you last highlighted, and the equipment menus on what is equipped.",
+        usable: () => !CursorMemory.StoodDown);
+
     /// <summary>NPC conversations as King's Field III's: Interact goes to the next line.
     /// Its two refinements stay in the Settings window.</summary>
     public static readonly PortSetting NpcDialogueOn = Switch(NpcDialogue.OnKey, "KF2_NPCDIALOGUE", "NPC dialogue",
@@ -514,7 +521,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRateRow,
         TextureFilter, PerPixel, AmbientOcclusionRow, ShadingRow,
         RenderDist, FogMode, Water,
-        Language, Font, AutoReloadOn, GearCompareOn, NpcDialogueOn, EnemyTurnSpeed,
+        Language, Font, AutoReloadOn, GearCompareOn, CursorMemoryOn, NpcDialogueOn, EnemyTurnSpeed,
         ControlsRow, InvertedCamera, StickSens, MouseSens, Gyro, RumbleRow,
         Positional,
     ];
@@ -526,7 +533,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRate, Smoothing,
         Mipmaps, Anisotropy, PerPixel, Ao, AoQuality, NoDitherOn, TrueColorOn,
         RenderDist, FogMode, MurkyWater, WaterWaves, Planar,
-        Language, Font, AutoReloadOn, GearCompareOn, NpcDialogueOn, EnemyTurnSpeed, FocusPauseOn,
+        Language, Font, AutoReloadOn, GearCompareOn, CursorMemoryOn, NpcDialogueOn, EnemyTurnSpeed, FocusPauseOn,
         Controls, StickAccel, InvertedCamera, StickTurn, StickLook, MouseTurn, MouseLookSens, ItemTurnOn, ItemTurnGyro, GyroAimOn, RumbleOn, RumbleHd,
         Positional,
     ];
