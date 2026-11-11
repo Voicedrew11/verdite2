@@ -363,10 +363,34 @@ Kf2.MenuWorld.Install();
 //     KF2_TEXT=0               the game's own lettering -- comparison only
 //     KF2_TEXT_PROBE=1         a line for each picture redrawn
 //     KF2_TEXT_TEST=3:0,6:360  open these messages from the main loop (KF2_AUTOPAD dismisses)
+//     KF2_FONT=classic|modern  PORT SETTINGS' FONT for this run
 Kf2.Text.Lettering.Configure(Environment.GetEnvironmentVariable("KF2_TEXT"),
                              Environment.GetEnvironmentVariable("KF2_TEXT_PROBE"),
-                             Environment.GetEnvironmentVariable("KF2_TEXT_TEST"));
+                             Environment.GetEnvironmentVariable("KF2_TEXT_TEST"),
+                             Environment.GetEnvironmentVariable("KF2_FONT"));
 Kf2.Text.Lettering.Install();
+
+// The Retranslation: a new English translation from the Japanese release, drawn by the
+// lettering above, always in its modern font (PORT SETTINGS > GAMEPLAY > LANGUAGE). See "The Retranslation" in
+// docs/PATCHES_AND_MODS.md.
+//     KF2_RETRANSLATION=0|1    the Retranslation, or not, for this run
+Kf2.Retranslation.Retranslation.Configure(Environment.GetEnvironmentVariable("KF2_RETRANSLATION"));
+Kf2.Retranslation.Retranslation.Install();
+
+// The Japanese language: the Japanese King's Field II's pictures, messages and menu
+// words laid over the US disc from the player's own Japanese disc (SLPS-00069 or
+// SLPS-91003), the US program and gameplay data kept. English unless chosen.
+// docs/JAPANESE.md.
+//
+//     KF2_LANGUAGE=ja|en      the language; unset, PORT SETTINGS ▸ GAMEPLAY ▸ LANGUAGE decides
+//     KF2_JP_DISC=path        the Japanese .cue or .chd; else beside the US disc
+//     KF2_JP_PROBE=1          each file's plan, served sectors, labels with no Japanese
+//     KF2_JP_DRYRUN=1         build the plan and the menu's words, log them, exit
+//     KF2_JP_BUTTONS=0        keep the US pad buttons (the Japanese run swaps ○ and ×)
+Kf2.Japanese.JapaneseDisc.Install();
+Kf2.Japanese.JapaneseMenu.Install();
+Kf2.Japanese.JapaneseMovies.Install();
+Kf2.Japanese.JapaneseButtons.Install();
 
 // The loading screen's walking figure is the same bug in a third place, and the
 // shared cause is that the game counts time in VSync(0) calls while a VSync(0)
@@ -1241,6 +1265,39 @@ Kf2.MenuMouse.Install();
 //                             and compare every byte
 Kf2.GearCompare.Configure(Environment.GetEnvironmentVariable("KF2_GEARCOMPARE"));
 Kf2.GearCompare.Install();
+
+// Menu cursors as King's Field III's: the Items and Magic pages open on what was
+// last highlighted, by item or spell, and the Equipment sub menus on what is
+// equipped. From verdite2-mods' mods/cursor-memory, which it stands down for. Off
+// by default; Gameplay > Cursor memory, PORT SETTINGS > GAMEPLAY > CURSOR MEMORY.
+//
+//     KF2_CURSORMEMORY=0|1        off or on for the run
+//     KF2_CURSORMEMORY_PROBE=1    a line for every cursor recorded or placed
+Kf2.CursorMemory.Configure(Environment.GetEnvironmentVariable("KF2_CURSORMEMORY"),
+                           Environment.GetEnvironmentVariable("KF2_CURSORMEMORY_PROBE"));
+Kf2.CursorMemory.Install();
+
+// The game's Select shortcut, five times over: keys 1-5 (or Select and the d-pad),
+// each holding an item or a spell, assigned from Equipment's Select row and used
+// through the game's own Select code. From verdite2-mods' mods/shortcuts, which it
+// stands down for. Off by default; Gameplay > Shortcuts, PORT SETTINGS > GAMEPLAY >
+// SHORTCUTS.
+//
+//     KF2_SHORTCUTS=0|1       off or on for the run
+//     KF2_SHORTCUTS_PROBE=1   a line for each assignment, shortcut fired and card load
+Kf2.Shortcuts.Shortcuts.Configure(Environment.GetEnvironmentVariable("KF2_SHORTCUTS"),
+                                  Environment.GetEnvironmentVariable("KF2_SHORTCUTS_PROBE"));
+Kf2.Shortcuts.Shortcuts.Install();
+
+// NPC conversations as King's Field III's: while an NPC's line is up, Interact
+// talks to them again at once (the next line) and Cancel ends it; shops and the
+// fortune teller are left alone. From verdite2-mods' mods/npc-dialogue, which it
+// stands down for. Off by default; Gameplay > NPC dialogue, PORT SETTINGS >
+// GAMEPLAY > NPC DIALOGUE.
+//
+//     KF2_NPCDIALOGUE=0|1     off or on for the run
+Kf2.NpcDialogue.Configure(Environment.GetEnvironmentVariable("KF2_NPCDIALOGUE"));
+Kf2.NpcDialogue.Install();
 
 // Enemies turn faster: every creature turn goes through func_8003C8D8, whose top
 // speed and acceleration a pre-hook scales when the turn is at the player (a chase,

@@ -6,6 +6,11 @@ using Verdite.Launcher;
 // files live, asks for a disc, builds the game from it on first run and hands
 // over. This is what it needs to know about this port. See docs/PACKAGING.md.
 
+const string JapaneseDiscMessage =
+    "This is the Japanese King's Field II. The port needs the US disc, SLUS-00158 " +
+    "(King's Field), as its main disc. Choose Japanese at the language step, or in " +
+    "Settings, and point it at this disc to play in Japanese.";
+
 return Launcher.Run(new LauncherGame
 {
     Name = "Verdite2",
@@ -23,9 +28,16 @@ return Launcher.Run(new LauncherGame
             "This is King's Field II (SLUS-00255), which is a different game. " +
             "The series was renumbered for the West: this port is of King's Field " +
             "(SLUS-00158), the US release of the Japanese King's Field II.",
+
+        // The Japanese King's Field II (SLPS-00069, and the PlayStation the Best
+        // SLPS-91003) is the disc the Japanese language is taken from
+        // (patches/japanese/JapaneseDisc.cs), not the port's main disc.
+        ["SLPS-00069"] = JapaneseDiscMessage,
+        ["SLPS-91003"] = JapaneseDiscMessage,
     },
 
     RecompilerConfig = "kf2.json",
+    BeforeDisc = Verdite2.Launcher.LanguageStep.Run,
     GameAssembly = "KingsField2",
     UpdateRepository = "Voicedrew11/verdite2",
 

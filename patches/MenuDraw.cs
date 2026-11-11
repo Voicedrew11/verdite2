@@ -63,46 +63,57 @@ public static class MenuDraw
     // on, the letters are its: cased, spaced and shadowed as it draws a label the
     // game built on its stack (Text.MenuLabels.Lay), so KF2_GEARCOMPARE=verify
     // still compares like with like.
+    //
+    // In a Japanese run, words with a Japanese version (Japanese text, or English the
+    // Japanese layer knows) are drawn in the Japanese font instead (JapaneseMenu.TryDrawText).
     public static void DrawText(IMemory m, int x, int y, string s)
     {
+        if (Japanese.JapaneseMenu.TryDrawText(m, TextTemplate, x, y, s)) return;
         var cells = new List<byte>(s.Length);
         foreach (char ch in s) cells.Add((byte)GlyphOf(ch));
+        int w = (short)m.ReadU16(TextTemplate + 8);
+        int h = (short)m.ReadU16(TextTemplate + 0xA);
         foreach (var (cell, X) in Text.MenuLabels.Lay(m, cells, x))
         {
             int g = cell & 0x7F;
-            uint p = NewQuad(m);
-            int w = (short)m.ReadU16(TextTemplate + 8);
-            int h = (short)m.ReadU16(TextTemplate + 0xA);
-
-            m.WriteU16(p + 0x08, (ushort)X);
-            m.WriteU16(p + 0x0A, (ushort)y);
-            m.WriteU16(p + 0x10, (ushort)(X + w));
-            m.WriteU16(p + 0x12, (ushort)y);
-            m.WriteU16(p + 0x18, (ushort)X);
-            m.WriteU16(p + 0x1A, (ushort)(y + h));
-            m.WriteU16(p + 0x20, (ushort)(X + w));
-            m.WriteU16(p + 0x22, (ushort)(y + h));
-
-            m.WriteU16(p + 0x16, m.ReadU16(TextTemplate));
-            m.WriteU16(p + 0x0E, m.ReadU16(TextTemplate + 2));
-
-            int u = (g & 15) * 8;
-            int v = (g >> 4) * 15;
-            int uw = m.ReadU8(TextTemplate + 8);
-            int vh = m.ReadU8(TextTemplate + 0xA);
-            m.WriteU8(p + 0x0C, (byte)u);
-            m.WriteU8(p + 0x0D, (byte)v);
-            m.WriteU8(p + 0x14, (byte)(u + uw));
-            m.WriteU8(p + 0x15, (byte)v);
-            m.WriteU8(p + 0x1C, (byte)u);
-            m.WriteU8(p + 0x1D, (byte)(v + vh));
-            m.WriteU8(p + 0x24, (byte)(u + uw));
-            m.WriteU8(p + 0x25, (byte)(v + vh));
-
-            Link(m, p, 10);
-            if (Text.Lettering.Active) Text.Shadow.Under(m, p, 10);
+            LabelCell(m, TextTemplate, X, y, w, h, (g & 15) * 8, (g >> 4) * 15);
         }
     }
+
+    /// <summary>
+    /// One letter quad as func_80021E10 builds it: a POLY_FT4 from the cursor, the
+    /// template's tpage and CLUT, a w x h cell at (u, v) drawn at (x, y), linked into
+    /// the label slot 10, with the lettering's shadow under it.
+    /// </summary>
+    public static void LabelCell(IMemory m, uint template, int x, int y, int w, int h, int u, int v)
+    {
+        uint p = NewQuad(m);
+        m.WriteU16(p + 0x08, (ushort)x);
+        m.WriteU16(p + 0x0A, (ushort)y);
+        m.WriteU16(p + 0x10, (ushort)(x + w));
+        m.WriteU16(p + 0x12, (ushort)y);
+        m.WriteU16(p + 0x18, (ushort)x);
+        m.WriteU16(p + 0x1A, (ushort)(y + h));
+        m.WriteU16(p + 0x20, (ushort)(x + w));
+        m.WriteU16(p + 0x22, (ushort)(y + h));
+
+        m.WriteU16(p + 0x16, m.ReadU16(template));
+        m.WriteU16(p + 0x0E, m.ReadU16(template + 2));
+
+        m.WriteU8(p + 0x0C, (byte)Math.Min(u, 255));
+        m.WriteU8(p + 0x0D, (byte)Math.Min(v, 255));
+        m.WriteU8(p + 0x14, (byte)Math.Min(u + w, 255));
+        m.WriteU8(p + 0x15, (byte)Math.Min(v, 255));
+        m.WriteU8(p + 0x1C, (byte)Math.Min(u, 255));
+        m.WriteU8(p + 0x1D, (byte)Math.Min(v + h, 255));
+        m.WriteU8(p + 0x24, (byte)Math.Min(u + w, 255));
+        m.WriteU8(p + 0x25, (byte)Math.Min(v + h, 255));
+
+        Link(m, p, LabelSlot);
+        if (Text.Lettering.Drawing) Text.Shadow.Under(m, p, (uint)LabelSlot);
+    }
+
+    const int LabelSlot = 10;
 
     // func_80022B20. Returns the widened digit buffer (no 0xFF terminator).
     public static byte[] FormatNumber(int value, int width, bool zeroPad = false, int mode = 0)

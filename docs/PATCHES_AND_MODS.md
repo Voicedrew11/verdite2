@@ -3537,6 +3537,19 @@ It replaces `MessageText` (sign text drawn in the interface font on an opaque bo
 judged unwanted and left off), whose files and `scripts/msg_glyphs.py` are gone;
 `KF2_TEXT_TEST` keeps its message opener.
 
+**FONT: CLASSIC or MODERN** (2026-11-11; PORT SETTINGS ▸ GAMEPLAY ▸ FONT, the *Font*
+combo at the top of Video ▸ Text, `kf2.text.font` 0 or 1, `KF2_FONT`). MODERN is all of
+the above; CLASSIC is the game's own letters, as `KF2_TEXT=0` but switched in play:
+`Lettering.Modern` is the choice and `Lettering.Drawing` what the hooks follow, applied on
+the game thread at the next label drawn or main-loop frame (the page is in a menu, where
+the main loop does not run). On the switch the menu font's two areas and the messages
+page are uploaded again, from the disc's page on CLASSIC (`MenuCells`/`HudMessages`
+`Pixels`), and the label, shadow and picture hooks pass through; a sign already on screen
+keeps its letters until the next one. With the Retranslation as the language, MODERN is
+drawn whatever FONT holds ("The Retranslation"). Measured headless, both languages, the menu open:
+classic, modern, classic, each logged with its uploads, no exception. The pictures by eye:
+not checked.
+
 What it does, by file (each file's comment has the detail):
 
 | file | what |
@@ -3604,6 +3617,70 @@ four-line wording; with the Text mod enabled too, this stood down.
 12`: no findings. **Not run:** the gear comparison's verify (no equip prompt reachable
 from the shell). **The picture was judged on the mod, not on this port of it**; the gear
 comparison's new lettering has not been looked at.
+
+## The Retranslation
+
+**Off by default; a player's choice**: the second of three languages on PORT SETTINGS ▸
+GAMEPLAY ▸ LANGUAGE (ENGLISH, RETRANSLATION, JAPANESE; the Settings window's Gameplay ▸
+*Language*), live, unlike JAPANESE, which waits for the next start; its parts and the
+workbook in the *Translation* section of Video ▸ Text; `verdite.language=retranslation`;
+`KF2_RETRANSLATION=0|1`. Brought in from the Retranslation mod (`kf2.retranslation`) of
+PerdueEgg's verdite2-mods (https://github.com/PerdueEgg/verdite2-mods, `mods/retranslation`,
+at `12df02b`), 2026-11-11, at the user's request: a new English translation made from the
+Japanese release, for every sign, dialogue line, description and place card, the menus,
+item, equipment and magic names, the labels the game builds in code, and the messages in
+play. `patches/retranslation/`, entry `Retranslation`. It carries only text; all of the
+lettering is the section above's.
+
+| file | what |
+|---|---|
+| `Script.cs` | the tables, the mod's `Text.cs` with the class renamed (`Text` would hide the `Kf2.Text` namespace) and its Movies table left out |
+| `MenuStrings.cs` | the mod's `Strings.cs`: 202 GAME.EXE menu slots rewritten in RAM and put back, and the code-built labels (SLASH, YES, ...) rewritten only for their draw |
+| `Workbook.cs` | the Mod EN column of `KF2_retranslation.ods` read from the data directory's `retranslation/` (beside `fonts/`), at start and on Import |
+| `Retranslation.cs` | the choice, the three parts, and `Follow`, which puts in place what is wanted on the game thread |
+
+What changed on the way in:
+
+- **No hooks of its own.** The mod hooked a pre and a post on the label routine
+  `func_80021E10` and a post on the main loop. `Lettering` already owns the replace on the
+  first and a post on the second, so it calls `Retranslation.BeforeLabel`/`AfterLabel`
+  around its label draw (the post in a `finally`, so the pair always closes) and
+  `Retranslation.Follow` from its main-loop post. It calls `Pictures`, `MenuCells` and the
+  string table directly rather than through the `kf2.text` slot.
+- **Switched on the game thread only.** The mod's settings set pictures and strings from
+  the host thread. Here the row and the window set `On` and the part switches; `Follow`
+  (from both of Lettering's hooks, so PORT SETTINGS, which is a menu with no main loop,
+  takes effect at once) applies the difference, and an Import hands its tables over for it
+  to install.
+- **One LANGUAGE row, one key.** The row's value is 0 English, 1 Retranslation, 2
+  Japanese, kept as `verdite.language`: none, `retranslation` or `ja`. Verdite Core's
+  language choice tests only for `ja`, so the Retranslation reads as not Japanese; and
+  the launcher's first-run step can write it, which a `kf2.` key would not allow (see
+  "The first-run language step" in JAPANESE.md). It was `kf2.retranslation.on` until
+  2026-11-11.
+- **It is always in the new font.** While the Retranslation is the language, `Lettering`
+  draws MODERN whatever FONT holds (`Lettering.WantModern`), and FONT shows MODERN, dimmed;
+  back to English, FONT's own choice returns. The font pages read the font the game thread
+  applied (`Lettering.ModernApplied`), not FONT's value: reading FONT, a stored CLASSIC
+  uploaded the disc's letters under the Retranslation and its menu strings stayed capitals.
+- **When it applies.** The Retranslation chosen, the port's lettering on, a run that is
+  not Japanese, and the Retranslation mod not enabled; otherwise the game's text is put
+  back. A Japanese run keeps the Japanese disc's own text until the next start.
+- **The movies are not taken**: the mod's Movies table fed the Japanese Disc mod's
+  re-lettering of the movie cards, which the port does not take ("The title and the
+  movies" in JAPANESE.md).
+- **The workbook is not shipped.** The built-in text is the workbook's as of `12df02b`;
+  `Script.cs` is rebuilt from a newer one with verdite2-mods' `tools/build_text_cs.py`,
+  renaming its class and namespace.
+
+Measured (2026-11-11, headless, `KF2_AUTOSTART=2 KF2_TEXT_PROBE=1 KF2_TEXT_TEST=3:0`):
+with NEW, `(3, 0)` is redrawn as 4 lines (the Retranslation's wording), with ORIGINAL as 5
+(the US text). Over the shell's settings session, with FONT stored CLASSIC: LANGUAGE to
+RETRANSLATION switched the font to modern, uploaded the port's letters and wrote the 202
+menu strings in lower case, with FONT refused as not usable; on to JAPANESE put the strings
+back and the font to classic; back to ENGLISH left it classic. No exception. `scripts/fuzz.py --runs 12` with `KF2_RETRANSLATION=1`: 240,000 frames, no findings.
+**Not looked at:** the menus, the code-built labels and the messages in play in the new
+text; the wording itself was the mod's, judged there.
 
 ## Pausing when the window loses focus
 
@@ -3871,6 +3948,119 @@ Measured on the move: `[KF2] gear compare: on, verify, 6/6 hooked`, booting into
 slot 2. The panel itself was judged by eye as the mod; the prompt is not reachable
 from the command channel (`press` does not reach the menu's Up/Down), so the
 patch's picture and its verify line on a real prompt are the user's to check.
+
+## Cursor memory
+
+**Off by default; measured in the menus, not judged in play.** King's Field III's menu
+cursors: the Items page and the Magic page open on the entry last highlighted, and
+every Equipment sub menu (weapon, armour, accessories, attack magic, the second slot)
+opens on what is equipped; an empty slot opens on the first row, as the game does.
+Gameplay ▸ *Cursor memory*, with the mod's three parts under it (Items, Magic,
+Equipment, all on); PORT SETTINGS ▸ GAMEPLAY ▸ CURSOR MEMORY; `kf2.cursormemory.on`,
+`KF2_CURSORMEMORY=0|1`, `KF2_CURSORMEMORY_PROBE=1` a line for each cursor recorded or
+placed. Brought in from the Cursor Memory mod (`kf2.cursormemory`) of PerdueEgg's
+verdite2-mods (https://github.com/PerdueEgg/verdite2-mods, `mods/cursor-memory`, at
+`12df02b`), 2026-11-11, at the user's request; `patches/CursorMemory.cs`, entry
+`CursorMemory`. The logic is the mod's; the class comment carries its reading of the
+list descriptor and each page's routines and call sites.
+
+- **By id, not by row.** The cursor is remembered as the item or spell it was on, so it
+  follows the entry when the list changes; a gone entry leaves it on the same row.
+- **Set where the page loads its preview.** The Items, gear and second-slot pages load
+  the highlighted item's model once with `func_80022CAC(ids[cursor])`; the cursor is
+  placed in a pre there and the call pointed at the placed entry, so the preview matches.
+  The magic pages have no preview, and are placed before their first step.
+- **Ordered around MenuMouse**, which hooks the same step `func_8001EB70`: the placing
+  pre runs before MenuMouse's (`order` -10), so MenuMouse takes the placed cursor as the
+  one it came in with, and the recording post after its post (10), after a click has
+  moved the cursor.
+- **The keys are the mod's** for the three parts; the switch is new (`.on`). It stands
+  down while the mod is enabled, and its controls are dimmed.
+
+Measured 2026-11-11, slot 2 in fdat05, through `KF2_SHELL`'s `press` and `point` with
+the probe on: the Items page recorded id `0x43` at entry 0, the pointer moved it to
+`0x4A` at entry 2, and the page reopened on entry 2 with MenuMouse reading cursor 2; the
+weapon sub menu opened on the equipped id `0x01`, entry 1 of 3 (the game's is entry 0).
+`scripts/fuzz.py --runs 12 --env KF2_CURSORMEMORY=1`: 240,000 frames, no findings. **Not
+reached**: the Magic page with a spell in it (slot 2 knows none), attack magic and the
+second slot with something equipped. Ships off until it is played.
+
+## Shortcuts
+
+**Off by default; assigning and loading measured, using not tried.** The game's Select
+shortcut, five times over: any of the five holds an item, an attack spell or a support
+spell, used with one press through the game's own Select code, so MP, the gauge, item
+counts and "use it on what is in front of you" all hold. Shortcut 1 is the game's
+Select itself. Keys 1-5, or Select and the d-pad (Up, Down, Left, Right); a d-pad
+direction given to a shortcut stops walking and turning in the world, not in menus.
+Assigned from Equipment's Select row (HOTKEYS with keyboard labels): pick, answer Yes,
+then a second list asks which shortcut. Gameplay ▸ *Shortcuts*, with the mod's page under
+it (labels, a key and a pad button per shortcut, the d-pad); PORT SETTINGS ▸ CONTROLS ▸
+SHORTCUTS (GAMEPLAY is full at seven rows; the check refuses an eighth at start);
+`kf2.shortcuts.on`, `KF2_SHORTCUTS=0|1`, `KF2_SHORTCUTS_PROBE=1` a line for each
+assignment, shortcut fired and card load. Brought in from the Shortcuts mod
+(`kf2.shortcuts`) of PerdueEgg's verdite2-mods (https://github.com/PerdueEgg/verdite2-mods,
+`mods/shortcuts`, at `12df02b`), 2026-11-11, at the user's request; `patches/shortcuts/`
+(`Shortcuts.cs` the hooks, `Picker.cs` the which-shortcut list, `Labels.cs` the words,
+`CardFiles.cs` the files), entry `Shortcuts`. The logic is the mod's; `Shortcuts.cs`
+carries its reading of the shortcut page, the setters and player control.
+
+- **Words through the game's label routine.** Names are copied cell for cell from the
+  name slots, and the port's own words encoded through the `kf2.text` slot that
+  `Lettering` publishes (or the Text mod, enabled in its place), so the lettering, the
+  Retranslation's names and a `shortcuts:` string-table key apply.
+- **The files are the mod's**: `shortcuts_slotN.txt` beside the cards (the working
+  directory; gitignored for a dev run), written on a card save while it is on or anything
+  is assigned, read on every card load, cleared by a new game or a death without Seath's
+  Tear. A player's shortcuts from the mod carry over, and its keys too.
+- **The settings page reads no guest memory**: what each shortcut holds is copied on the
+  game thread at each control tick, and a Clear goes through the same lock.
+- Stands down while the mod is enabled.
+
+Measured 2026-11-11, slot 2 in fdat05, through `KF2_SHELL`: `9/9 hooked`; Equipment ▸
+the Select row ▸ the first entry ▸ Yes opened the which-shortcut list (5 rows, the menu
+pointer driving it), and a click on its second row logged `item 0x47 -> shortcut 2`
+and returned to Equipment; a `shortcuts_slot2.txt` of `-1,71` / `3,-1` loaded as
+`FF/47 03/FF FF/FF FF/FF` at autostart and on `load 2`. `scripts/fuzz.py --runs 12 --env
+KF2_SHORTCUTS=1`: 240,000 frames, no findings. **Not tried**: firing a shortcut (a key or
+pad button is polled from the host, which nothing headless presses), the d-pad takeover,
+a card save writing the file, a Japanese run, the picture of the list.
+
+## NPC dialogue
+
+**Off by default; mechanism attached, never played in the port.** King's Field III's
+conversations: while an NPC's line is up, Interact (Cross) goes straight to their next
+line, and Cancel (Circle) ends the conversation; at the end of the dialogue Interact
+repeats the last line until Cancel, as talking again would. An NPC that opens a menu
+after talking (the shops, the fortune teller) is left as it was. Gameplay ▸ *NPC
+dialogue*, with the mod's two refinements under it (*No animations between lines*,
+*Cancel does not open the menu*, both on); PORT SETTINGS ▸ GAMEPLAY ▸ NPC DIALOGUE;
+`kf2.npcdialogue.on`, `KF2_NPCDIALOGUE=0|1`. Brought in from the NPC Dialogue mod
+(`kf2.npcdialogue`) of PerdueEgg's verdite2-mods
+(https://github.com/PerdueEgg/verdite2-mods, `mods/npc-dialogue`, at `12df02b`),
+2026-11-11, at the user's request; `patches/NpcDialogue.cs`, entry `NpcDialogue`. The
+logic is the mod's, line for line; the class comment carries its reading of the talk
+interpreter `func_80047000`, and the addresses.
+
+- **Talking again is the next line.** A talk shows one line and leaves the script
+  cursor (`rec+0x10`) after it, so the patch calls `func_80047000` again from its own
+  post, for as long as Interact closed the line. Which button closed it is read with
+  the game's `PadRead(1)` where the closing fade starts (a pre on `func_800356F4` from
+  `0x80035C6C`): the fade outlasts a tap.
+- **It runs beside MenuWorld**, which replaces `func_800356F4`. HookManager runs a
+  function's pres before its replace, so the pre still sees the caller's return address.
+- **Shops are not chained**: the record's `+0x12` high nibble 0..3 opens a menu after
+  the talk.
+- **The keys are under `kf2.npcdialogue.`**, the mod's own for the two refinements, so a
+  player who set them in the mod keeps them; the switch is new (`.on`). It stands down
+  while the mod is enabled, and its controls are dimmed.
+- **Ships off** because nobody has talked to an NPC with it in the port: the measured
+  runs have no NPC within reach of a save, and the shell cannot read RAM to find one.
+
+Measured: build clean; `[KF2] npc dialogue: on, 4/4 hooked` into fdat05 from slot 2;
+`scripts/fuzz.py --runs 12 --env KF2_NPCDIALOGUE=1`, 240,000 frames, no findings
+(whether a run reached a conversation is not recorded). **Not tried**: a conversation,
+chained or ended with Cancel, the animations, the menu guard, a shop left alone.
 
 ## Enemies turn faster
 

@@ -2058,6 +2058,18 @@ Four files in the directory have no entry below:
   the software rasterizer's pixels and nothing before them; headless, that was half
   a frame. Measured in KF2: about 650 frames a second for one run, 430-850 each
   with six at once, against 250 rasterizing. **No recompile.**
+- `0112-pad-buttons.patch` — a pad's own buttons, rewritable by the game.
+  `InputManager.PollGamepads` used to AND each pad's buttons straight into the word
+  the keyboard had just written; it now builds the pad's word alone, passes it through
+  `InputManager.PadButtons` (`(port, buttons) -> buttons`, active low, `Controller`'s
+  layout; forwarded as `HostWindow.PadButtons`, the class being internal) and then
+  ANDs it in, which is the same word when nothing is set. For a convention that
+  belongs to the hardware and not to the bindings: KF2 swaps the pad's Cross and
+  Circle in a Japanese run, which leaves the keyboard, the mouse and the port's own
+  presses with their US meaning, and writes nothing to settings (the bindings are
+  saved on exit, so swapping them in memory would have been saved). Measured in KF2:
+  builds, and a headless Japanese run reaches an area through `KF2_AUTOSTART`. **Not
+  tried on a pad.** **No recompile.**
 
 ## Package bumps
 

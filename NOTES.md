@@ -336,9 +336,13 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - Menus draw the world live
 - Messages draw the world live
 - The game's text in new fonts
+- The Retranslation
 - Pausing when the window loses focus
 - Auto reload
 - Comparing gear on the equip prompt
+- Cursor memory
+- Shortcuts
+- NPC dialogue
 - Enemies turn faster
 - A dynamic map
 - Five map controls that were not choices
@@ -482,6 +486,20 @@ The plan to draw the world from meshes kept on the GPU (retained-mode rendering)
 - Where the reflections come in
 - The old path stays as the comparison
 - Rules this keeps
+
+### [JAPANESE.md](docs/JAPANESE.md)
+
+The game in Japanese from the player's own Japanese *King's Field II* (SLPS-00069, or the Best SLPS-91003): dialogue, signs, item descriptions and the messages in play served sector for sector over the US disc, the menu's words drawn from the Japanese GAME.EXE's records through a glyph atlas in the US font page, and the Japanese title and movies. Off by default (`KF2_LANGUAGE=ja`, PORT SETTINGS ▸ GAMEPLAY ▸ LANGUAGE); measured, not judged.
+
+- Which disc, and what each gets
+- What comes from the Japanese disc
+- The menu's text
+- The port's own words
+- The 1995 program
+- The title and the movies
+- Switches and checks
+- Measured (2026-11-11)
+- Open
 
 ### [SHARING.md](docs/SHARING.md)
 

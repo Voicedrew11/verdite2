@@ -51,6 +51,11 @@ public static class SettingsPage
     const int OurX = 31, OurY = 201;
     const string OurLabel = "PORT SETTINGS";
     const string SetupLabel = "RUN SETUP";         // the DISPLAY page's last row
+    const string SaveLabel = "SAVE CHANGES", DiscardLabel = "DISCARD CHANGES", ReturnLabel = "RETURN";
+
+    /// <summary>Every word the page draws that is not a setting's: the menu item, RUN
+    /// SETUP and the question's three (for the Japanese layer's check).</summary>
+    public static IEnumerable<string> OwnLabels => [OurLabel, SetupLabel, SaveLabel, DiscardLabel, ReturnLabel];
 
     // ---- The action masks: the pad word ANDed with each, as the menu tests them ----
     const uint ConfirmMask = 0x8006E568;          // Cross
@@ -321,9 +326,9 @@ public static class SettingsPage
             for (int f = 0; f < 2; f++)
             {
                 KingsField2.func_80022530(c, m);  // the frame head
-                Item(c, m, AskX, AskY, "SAVE CHANGES", cursor == 0, usable: true);
-                Item(c, m, AskX, AskY + AskStep, "DISCARD CHANGES", cursor == 1, usable: true);
-                Item(c, m, AskX, AskY + 2 * AskStep, "RETURN", cursor == 2, usable: true);
+                Item(c, m, AskX, AskY, SaveLabel, cursor == 0, usable: true);
+                Item(c, m, AskX, AskY + AskStep, DiscardLabel, cursor == 1, usable: true);
+                Item(c, m, AskX, AskY + 2 * AskStep, ReturnLabel, cursor == 2, usable: true);
                 // The chooser above takes these as its rows, as it takes the drawer's.
                 Pointed(m, AskX, AskY, AskStep, 3, (int)cursor, values: false, "settings question");
                 KingsField2.func_800226A8(c, m);  // the presenter

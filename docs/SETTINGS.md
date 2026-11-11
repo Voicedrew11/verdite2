@@ -86,8 +86,12 @@ HUD to OFF, pointing at row 1 moved it back, a click at (5,230) opened the quest
 | WORLD | RENDER DISTANCE | ORIGINAL, ENHANCED | `kf2.renderdistance`: 10.5 tiles (off) or 15 (its maximum; not judged) |
 | | FOG | CORNERS, PIXEL DEPTH, DISTANCE | `kf2.fog`: the game's fog at the corners, by pixel depth, or by distance from the eye (the default since 2026-10-09; a kept `kf2.fog` still wins) (`KF2_FOG`; RENDERING, "Fog by distance from the eye") |
 | | WATER | ORIGINAL, ENHANCED, FULL | `kf2.murk.on`, `kf2.waves.on`, `kf2.ssr.planar`: ENHANCED murk and waves, FULL the planar reflection too (the default) |
-| GAMEPLAY | RELOAD ON DEATH | OFF, ON | `kf2.autoreload.enabled` |
+| GAMEPLAY | LANGUAGE | ENGLISH, RETRANSLATION, JAPANESE, RESTART | one key, `verdite.language`: `ja` (read at the next start), `retranslation` (live), or absent for English; also the launcher's first-run language step (JAPANESE, "The first-run language step"); RETRANSLATION is a new English translation from the Japanese release, always in the MODERN font (PATCHES_AND_MODS, "The Retranslation"); JAPANESE needs the player's Japanese disc (JAPANESE, "Which disc, and what each gets"); locked by `KF2_LANGUAGE` or `KF2_RETRANSLATION` |
+| | FONT | CLASSIC, MODERN | `kf2.text.font` (0 or 1, absent is MODERN): the port's lettering or the game's own letters, live (PATCHES_AND_MODS, "The game's text in new fonts"); in a Japanese run the Latin letters in the menus follow it (JAPANESE, "The menu's text"); dimmed under `KF2_TEXT=0`, with the Text mod enabled, or while LANGUAGE is RETRANSLATION, when it shows MODERN |
+| | RELOAD ON DEATH | OFF, ON | `kf2.autoreload.enabled` |
 | | COMPARE GEAR | OFF, ON | `kf2.gearcompare.enabled` |
+| | CURSOR MEMORY | OFF, ON | `kf2.cursormemory.on`: the Items and Magic pages open on what was last highlighted, the equipment menus on what is equipped (PATCHES_AND_MODS, "Cursor memory"); dimmed while the Cursor Memory mod is enabled |
+| | NPC DIALOGUE | OFF, ON | `kf2.npcdialogue.on`: Interact goes to an NPC's next line, Cancel ends the conversation (PATCHES_AND_MODS, "NPC dialogue"); dimmed while the NPC Dialogue mod is enabled |
 | | ENEMY TURN | ORIGINAL, X1.25 … X8 | `kf2.enemyturn` (PATCHES_AND_MODS, "Enemies turn faster"); tracking while standing stays in the Settings window |
 | | MAP | WHOLE AREA, AS YOU GO | the map mod's own page (`mods/map`, `MapPage`), present only with `kf2.map` enabled in the Mods panel: `kf2.map.fog`; enabling the mod is the on switch, so `kf2.map.on` is no longer read. Not a PORT SETTINGS row any more |
 | CONTROLS | CONTROLS | 2D, 2D ACCEL, 3D | `kf2.controls` (`True` is 3D) and `kf2.analog.accel`: the setup's turning page as a row; 3D clears the acceleration, as the setup's tank option does (INPUT, "2D and 3D controls") |
@@ -96,6 +100,7 @@ HUD to OFF, pointing at row 1 moved it back, a click at (5,230) opened the quest
 | | MOUSE SENS | X0.25 … X5 | `kf2.mouse.turn` and `kf2.mouse.look`, as STICK SENS; dimmed only under `KF2_MOUSE=0` |
 | | GYRO | OFF, ON | `kf2.itemturn.gyro` and `kf2.gyroaim.on`: a held item (picked up or previewed) turns and a drawn bow aims with the pad's gyroscope (INPUT, "Turning a picked-up item", "Rumble and gyro aim with a drawn bow"); a pair set apart shows CUSTOM |
 | | RUMBLE | OFF, ON, HD | `kf2.rumble.on`, `kf2.rumble.hd`; OFF leaves the HD choice |
+| | SHORTCUTS | OFF, ON | `kf2.shortcuts.on`: five Select shortcuts on keys 1-5 or Select and the d-pad, each an item or a spell (PATCHES_AND_MODS, "Shortcuts"); on CONTROLS because GAMEPLAY is full at seven rows; keys and buttons in the Settings window; dimmed while the Shortcuts mod is enabled |
 | SOUND | 3D AUDIO | ORIGINAL, SPEAKERS, HEADPHONES | `kf2.audio.positional` (AUDIO, "Positional audio") |
 
 The minimap has no saved key (N toggles it for the session). The map's pad button

@@ -301,6 +301,26 @@ public static class PortSettings
         Gameplay, "COMPARE GEAR", () => GearCompare.Enabled, v => GearCompare.Enabled = v, true,
         tip: "Choosing equipment or browsing a shop shows every stat the item would change, now and after.");
 
+    /// <summary>Menu pages open where they were left, or on what is equipped, as King's
+    /// Field III's. Its three parts stay in the Settings window.</summary>
+    public static readonly PortSetting CursorMemoryOn = Switch(CursorMemory.OnKey, "KF2_CURSORMEMORY", "Cursor memory",
+        Gameplay, "CURSOR MEMORY", () => CursorMemory.Enabled, v => CursorMemory.Enabled = v, false,
+        tip: "The Items and Magic pages open on what you last highlighted, and the equipment menus on what is equipped.",
+        usable: () => !CursorMemory.StoodDown);
+
+    /// <summary>Five Select shortcuts. Their keys, buttons and labels stay in the Settings window.</summary>
+    public static readonly PortSetting ShortcutsOn = Switch(Shortcuts.Shortcuts.OnKey, "KF2_SHORTCUTS", "Shortcuts",
+        ControlsPage, "SHORTCUTS", () => Shortcuts.Shortcuts.Enabled, v => Shortcuts.Shortcuts.Enabled = v, false,
+        tip: "Five Select shortcuts, on keys 1-5 or Select and the d-pad, each holding an item or a spell. Assign them from Equipment.",
+        usable: () => !Shortcuts.Shortcuts.StoodDown);
+
+    /// <summary>NPC conversations as King's Field III's: Interact goes to the next line.
+    /// Its two refinements stay in the Settings window.</summary>
+    public static readonly PortSetting NpcDialogueOn = Switch(NpcDialogue.OnKey, "KF2_NPCDIALOGUE", "NPC dialogue",
+        Gameplay, "NPC DIALOGUE", () => NpcDialogue.Enabled, v => NpcDialogue.Enabled = v, false,
+        tip: "While an NPC's line is up, Interact goes straight to their next line and Cancel ends the conversation.",
+        usable: () => !NpcDialogue.StoodDown);
+
     /// <summary>How fast a creature turns at the player, as a multiple of the game's own.
     /// Tracking while standing stays in the Settings window.</summary>
     public static readonly PortSetting EnemyTurnSpeed = new()
@@ -311,6 +331,57 @@ public static class PortSettings
         MenuValue = v => v <= EnemyTurn.Min ? "ORIGINAL" : "X" + Number(v),
         Default = EnemyTurn.Min, Live = () => EnemyTurn.Multiplier, Apply = v => EnemyTurn.SetMultiplier((float)v),
         Stored = Stored.Float, Ui = Ui.None, Min = EnemyTurn.Min, Max = EnemyTurn.Max,
+    };
+
+    /// <summary>The language: English (the US text), the Retranslation (a new English
+    /// translation made from the Japanese release, <see cref="Retranslation.Retranslation"/>,
+    /// live, and always in the port's font), or Japanese from the player's own Japanese
+    /// disc (patches/japanese/, docs/JAPANESE.md), which takes effect at the next start:
+    /// that value is kept and shown, and the layer is not changed in this run. One key,
+    /// verdite.language: "ja", "retranslation", or none for English.</summary>
+    public static readonly PortSetting Language = new()
+    {
+        Key = LanguageChoice.Key, Envs = ["KF2_LANGUAGE", "KF2_RETRANSLATION"], Label = "Language",
+        Tip = "English: the US release's text.\n" +
+              "Retranslation: a new English translation made from the Japanese release, for signs, dialogue, descriptions, menus and names. Uses the Modern font.\n" +
+              "Japanese: the Japanese text, pictures, menus and movies, from your own Japanese King's Field II disc (SLPS-00069 or SLPS-91003) " +
+              "in the same folder as the US disc or in its \"japanese\" subfolder. The menus need the PlayStation the Best disc. " +
+              "Japanese takes effect the next time the game starts.",
+        Page = Gameplay, MenuLabel = "LANGUAGE", Steps = [0, 1, 2],
+        MenuValue = Named([0, 1, 2], "ENGLISH", "RETRANSLATION", "JAPANESE, RESTART"),
+        Names = ["English", "Retranslation", "Japanese (next start)"], Default = 0,
+        Live = () => Japanese.JapaneseDisc.Choice > 0.5 ? 2 : Retranslation.Retranslation.On ? 1 : 0,
+        Apply = v =>
+        {
+            Japanese.JapaneseDisc.Choice = v > 1.5 ? 1 : 0;
+            Retranslation.Retranslation.On = v is > 0.5 and < 1.5;
+        },
+        Keys = v =>
+        [
+            (LanguageChoice.Key, v switch
+            {
+                > 1.5 => LanguageChoice.Japanese,
+                > 0.5 => Retranslation.Retranslation.LanguageValue,
+                _ => null,
+            }),
+        ],
+        Ui = Ui.Combo,
+    };
+
+    /// <summary>The port's fonts or the game's own letters (<see cref="Text.Lettering.Modern"/>),
+    /// live; in a Japanese run, the Latin letters in the menus follow it. The Retranslation
+    /// always draws in the port's font, so while it is the language this shows MODERN and is
+    /// dimmed. Dimmed too when the lettering is off for the run (KF2_TEXT=0) or the Text mod
+    /// draws instead.</summary>
+    public static readonly PortSetting Font = new()
+    {
+        Key = Text.Lettering.FontKey, Envs = ["KF2_FONT"], Label = "Font",
+        Tip = "Modern: the port's lettering, with lower case, even spacing and redrawn signs and dialogue.\n" +
+              "Classic: the game's own letters, as the PlayStation drew them.",
+        Page = Gameplay, MenuLabel = "FONT", Steps = [0, 1], MenuValue = Named([0, 1], "CLASSIC", "MODERN"),
+        Names = ["Classic", "Modern"], Default = 1, Live = () => Text.Lettering.Modern || Retranslation.Retranslation.On ? 1 : 0,
+        Apply = v => Text.Lettering.Modern = v >= 0.5, Stored = Stored.Int, Ui = Ui.None,
+        Usable = () => Text.Lettering.Enabled && !Text.Lettering.StoodDown && !Retranslation.Retranslation.On,
     };
 
     /// <summary>Verdite Core's pause while the window is in the background; the
@@ -456,8 +527,8 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRateRow,
         TextureFilter, PerPixel, AmbientOcclusionRow, ShadingRow,
         RenderDist, FogMode, Water,
-        AutoReloadOn, GearCompareOn, EnemyTurnSpeed,
-        ControlsRow, InvertedCamera, StickSens, MouseSens, Gyro, RumbleRow,
+        Language, Font, AutoReloadOn, GearCompareOn, CursorMemoryOn, NpcDialogueOn, EnemyTurnSpeed,
+        ControlsRow, InvertedCamera, StickSens, MouseSens, Gyro, RumbleRow, ShortcutsOn,
         Positional,
     ];
 
@@ -468,7 +539,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRate, Smoothing,
         Mipmaps, Anisotropy, PerPixel, Ao, AoQuality, NoDitherOn, TrueColorOn,
         RenderDist, FogMode, MurkyWater, WaterWaves, Planar,
-        AutoReloadOn, GearCompareOn, EnemyTurnSpeed, FocusPauseOn,
+        Language, Font, AutoReloadOn, GearCompareOn, CursorMemoryOn, ShortcutsOn, NpcDialogueOn, EnemyTurnSpeed, FocusPauseOn,
         Controls, StickAccel, InvertedCamera, StickTurn, StickLook, MouseTurn, MouseLookSens, ItemTurnOn, ItemTurnGyro, GyroAimOn, RumbleOn, RumbleHd,
         Positional,
     ];

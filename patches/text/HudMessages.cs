@@ -151,10 +151,17 @@ static class HudMessages
         return lo > hi ? (x, 0, 0) : (x, lo, hi);
     }
 
+    /// <summary>The page to upload: the redrawn one, or on FONT CLASSIC the disc's own.</summary>
     static byte[]? Pixels()
     {
         if (_px != null) return _px;
         if (!Load()) return null;
+        if (!Lettering.ModernApplied)
+        {
+            _px = new byte[PageW * PageH];
+            for (int k = 0; k < _disc!.Length; k++) { _px[2 * k] = (byte)(_disc[k] & 15); _px[2 * k + 1] = (byte)(_disc[k] >> 4); }
+            return _px;
+        }
         var map = ColourMap();
         var px = new byte[PageW * PageH];
         for (int id = 0; id < Count; id++)
