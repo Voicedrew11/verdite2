@@ -1264,6 +1264,17 @@ Kf2.MenuMouse.Install();
 Kf2.GearCompare.Configure(Environment.GetEnvironmentVariable("KF2_GEARCOMPARE"));
 Kf2.GearCompare.Install();
 
+// Menu cursors as King's Field III's: the Items and Magic pages open on what was
+// last highlighted, by item or spell, and the Equipment sub menus on what is
+// equipped. From verdite2-mods' mods/cursor-memory, which it stands down for. Off
+// by default; Gameplay > Cursor memory, PORT SETTINGS > GAMEPLAY > CURSOR MEMORY.
+//
+//     KF2_CURSORMEMORY=0|1        off or on for the run
+//     KF2_CURSORMEMORY_PROBE=1    a line for every cursor recorded or placed
+Kf2.CursorMemory.Configure(Environment.GetEnvironmentVariable("KF2_CURSORMEMORY"),
+                           Environment.GetEnvironmentVariable("KF2_CURSORMEMORY_PROBE"));
+Kf2.CursorMemory.Install();
+
 // NPC conversations as King's Field III's: while an NPC's line is up, Interact
 // talks to them again at once (the next line) and Cancel ends it; shops and the
 // fortune teller are left alone. From verdite2-mods' mods/npc-dialogue, which it

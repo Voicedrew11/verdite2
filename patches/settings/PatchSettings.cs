@@ -251,6 +251,7 @@ public static class PatchSettings
         Register("gameplay", new FocusPausePage());
         Register("gameplay", new AutoReloadPage());
         Register("gameplay", new GearComparePage());
+        Register("gameplay", new CursorMemoryPage());
         Register("gameplay", new NpcDialoguePage());
         Register("gameplay", new ItemTurnPage());
         Register("gameplay", new MessageFadePage());
