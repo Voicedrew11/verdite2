@@ -90,6 +90,19 @@ each Japanese palette index mapped to the nearest US colour. A cell drawn within
 vblanks is not reused, and each use checks the cell's pixels and rewrites them if an
 area load re-uploaded the page.
 
+**The Latin letters are the US font's.** The Japanese page has its own full-width Latin
+cells: N E W H M P 1-8 at `0xE0`-`0xED`, "On" and "Off" at `0xF0`-`0xF4`, C and D at
+`0x10D`-`0x10E` (the same on all three discs). Only four labels of the measured map use
+them: HP and MP on status page 1, ON and OFF on the option page. They looked out of
+place beside the US-lettered English, so a run of them is drawn from the US label font on
+the same page, in the US routine's cells (the template's 8 × 15, u = 8·(g & 15),
+v = 15·(g >> 4)), 7 px apart, or spaced by the port's lettering, and 1 px before the next
+Japanese cell. Which letters is the FONT row's (PORT SETTINGS ▸ GAMEPLAY ▸ FONT): MODERN the
+port's, so "On"/"Off" keep their lower case; CLASSIC the disc's capitals, ON/OFF. A label
+right-aligned by its leading `0xFF` blanks is moved right by what the narrower letters
+saved, so it still ends where the Japanese routine's would. Measured: the dry run's map;
+the HP/MP/ON/OFF draws by eye: not checked.
+
 **Which Japanese a label gets.** The US and Japanese programs have the same menu
 routines in the same order; ten US routines that draw labels pair one to one with ten
 Japanese ones (46 US label calls, 49 Japanese). A label is looked up, in order:

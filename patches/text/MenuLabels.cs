@@ -200,8 +200,8 @@ static class MenuLabels
     public static List<(byte Cell, int X)> Lay(IMemory m, List<byte> gameCells, int x0)
     {
         var cells = gameCells;
-        if (Lettering.Active && GameText.Cased(gameCells) is { } cased) cells = cased;
-        if (Lettering.Active && Arrange(m, cells, gameCells, x0, onStack: true) is { } letters) return letters;
+        if (Lettering.Drawing && GameText.Cased(gameCells) is { } cased) cells = cased;
+        if (Lettering.Drawing && Arrange(m, cells, gameCells, x0, onStack: true) is { } letters) return letters;
         var game = new List<(byte, int)>(cells.Count);
         for (int i = 0; i < cells.Count && i < MaxCells; i++) game.Add((cells[i], x0 + i * GameAdvance));
         return game;

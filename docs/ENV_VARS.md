@@ -33,6 +33,7 @@ KF2_FRAMEVIEW_OUT=dir                  # also write each capture's commands and 
 KF2_MENUPACING=0                       # menu cursor repeat and blink back on the frame clock (on by default)
 KF2_MENUPACING_PROBE=1                 # what each repeat cost, and the blink's step rate
 KF2_TEXT=0                             # the game's own lettering: none of the Text feature's fonts, casing, spacing or shadows, and no kf2.text slot for mods (comparison; Video > Text otherwise)
+KF2_FONT=classic                       # PORT SETTINGS > GAMEPLAY > FONT for this run: classic (the game's own letters) or modern (the port's), locking the row
 KF2_TEXT_PROBE=1                       # a line for each picture redrawn, each label cased the first time, and the PORT SETTINGS words read
 KF2_TEXT_TEST=3:0,6:360                # open these messages (file:entry) from the main loop 10 s in; KF2_AUTOPAD dismisses them
 KF2_LANGUAGE=ja                        # play in Japanese from the player's Japanese disc (en: English); wins over the stored verdite.language (docs/JAPANESE.md)

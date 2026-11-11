@@ -25,6 +25,9 @@ namespace Kf2.Text;
 /// (func_80060624) writes them into any upload that covers them, and once, from
 /// the main loop, a direct upload of each area from scratch memory far below
 /// the stack pointer. Until then, text is encoded in capitals only (Ready).
+///
+/// With FONT on CLASSIC (<see cref="Lettering.Modern"/>) both areas are the disc's own
+/// pixels, put up once from the main loop to undo the port's letters, and Ready is false.
 /// </summary>
 static class MenuCells
 {
@@ -54,7 +57,10 @@ static class MenuCells
     static readonly Dictionary<char, int> _cells = MakeAll();
     static readonly Dictionary<int, char> _chars = Reverse();
 
-    public static bool Ready { get; private set; }
+    /// <summary>The port's letters, lower case included, are in VRAM.</summary>
+    public static bool Ready => _ready && Lettering.Drawing;
+
+    static bool _ready;
 
     static Dictionary<char, int> MakeDisc()
     {
@@ -115,13 +121,16 @@ static class MenuCells
     public static void Invalidate()
     {
         foreach (var a in Areas) { a.Px = null; a.Uploaded = false; }   // the main loop puts the new letters up
+        _ready = false;
     }
 
     /// <summary>An area's pixels: rows 0-6 from the character map; the digit
-    /// strip from the disc's page with the map's 0-9 over its first column.</summary>
+    /// strip from the disc's page with the map's 0-9 over its first column. On
+    /// CLASSIC, both the disc's page as it is.</summary>
     static byte[,]? Pixels(Area a)
     {
         if (a.Px != null) return a.Px;
+        if (!Lettering.Modern) return a.Px = DiscPixels(a);
         if (!Fonts.Ready()) return null;
         var px = new byte[a.H, a.W];
         if (a == Letters)
@@ -155,6 +164,15 @@ static class MenuCells
         return px;
     }
 
+    static byte[,]? DiscPixels(Area a)
+    {
+        if (!Disc.MenuPage(out var page, out _)) return null;
+        var px = new byte[a.H, a.W];
+        for (int v = 0; v < a.H; v++)
+            for (int u = 0; u < a.W; u++) px[v, u] = page[v * 256 + a.U + u];
+        return px;
+    }
+
     /// <summary>Pre on LoadImage(rect, data): the cells into any upload over them.</summary>
     public static void BeforeLoadImage(CpuContext c, IMemory m)
     {
@@ -182,7 +200,7 @@ static class MenuCells
                     m.WriteU8(at, b);
                 }
             }
-            if (a == Letters && rx <= a.X && rx + rw >= a.X + a.HW && ry <= PageY && ry + rh >= PageY + a.H) Ready = true;
+            if (a == Letters && rx <= a.X && rx + rw >= a.X + a.HW && ry <= PageY && ry + rh >= PageY + a.H) _ready = Lettering.Modern;
         }
     }
 
@@ -209,8 +227,9 @@ static class MenuCells
                 c.A0 = scratch; c.A1 = data; c.A2 = 0; c.A3 = 0;
                 c.RA = FakeRa;
                 KingsField2.func_80060624(c, m);
-                if (a == Letters) { Ready = true; Console.WriteLine("[KF2] text: menu font: letters uploaded"); }
-                else Console.WriteLine("[KF2] text: menu font: number digits and signs uploaded");
+                string font = Lettering.Modern ? "" : " (classic: the disc's own)";
+                if (a == Letters) { _ready = Lettering.Modern; Console.WriteLine($"[KF2] text: menu font: letters uploaded{font}"); }
+                else Console.WriteLine($"[KF2] text: menu font: number digits and signs uploaded{font}");
             }
             catch (Exception e) { Console.WriteLine($"[KF2] text: menu font upload: {e.Message}"); }
             finally { c.Restore(snap); }

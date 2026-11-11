@@ -32,6 +32,15 @@ public sealed class TextPage : IPatchPage
             return;
         }
 
+        int font = Lettering.Modern ? 1 : 0;
+        if (ImGui.Combo("Font", ref font, "Classic\0Modern\0"))
+        {
+            Lettering.Modern = font == 1;
+            PatchSettings.Set(Lettering.FontKey, font);
+        }
+        Tip("Modern: the port's lettering below. Classic: the game's own letters, and the switches below do nothing. Also PORT SETTINGS > GAMEPLAY > FONT.");
+        if (!Lettering.Modern) ImGui.BeginDisabled();
+
         bool pictures = GameText.ShowPictures;
         if (ImGui.Checkbox("Signs and dialogue in the new fonts", ref pictures))
         {
@@ -81,6 +90,7 @@ public sealed class TextPage : IPatchPage
             PatchSettings.Set(Lettering.ShadowMenusKey, shadowMenus);
         }
         Tip("The same for menu labels, numbers and the short messages in play.");
+        if (!Lettering.Modern) ImGui.EndDisabled();
 
         ImGui.TextDisabled($"Fonts: {Fonts.Status}");
         ImGui.TextWrapped($"Character maps: {Fonts.Folder}");

@@ -3537,6 +3537,18 @@ It replaces `MessageText` (sign text drawn in the interface font on an opaque bo
 judged unwanted and left off), whose files and `scripts/msg_glyphs.py` are gone;
 `KF2_TEXT_TEST` keeps its message opener.
 
+**FONT: CLASSIC or MODERN** (2026-11-11; PORT SETTINGS ▸ GAMEPLAY ▸ FONT, the *Font*
+combo at the top of Video ▸ Text, `kf2.text.font` 0 or 1, `KF2_FONT`). MODERN is all of
+the above; CLASSIC is the game's own letters, as `KF2_TEXT=0` but switched in play:
+`Lettering.Modern` is the choice and `Lettering.Drawing` what the hooks follow, applied on
+the game thread at the next label drawn or main-loop frame (the page is in a menu, where
+the main loop does not run). On the switch the menu font's two areas and the messages
+page are uploaded again, from the disc's page on CLASSIC (`MenuCells`/`HudMessages`
+`Pixels`), and the label, shadow and picture hooks pass through; a sign already on screen
+keeps its letters until the next one. Measured headless, both languages, the menu open:
+classic, modern, classic, each logged with its uploads, no exception. The pictures by eye:
+not checked.
+
 What it does, by file (each file's comment has the detail):
 
 | file | what |

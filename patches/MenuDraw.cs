@@ -100,7 +100,7 @@ public static class MenuDraw
             m.WriteU8(p + 0x25, (byte)(v + vh));
 
             Link(m, p, 10);
-            if (Text.Lettering.Active) Text.Shadow.Under(m, p, 10);
+            if (Text.Lettering.Drawing) Text.Shadow.Under(m, p, 10);
         }
     }
 

@@ -328,6 +328,20 @@ public static class PortSettings
         Keys = v => [(LanguageChoice.Key, v is > 0.5 ? LanguageChoice.Japanese : null)], Ui = Ui.Combo,
     };
 
+    /// <summary>The port's fonts or the game's own letters (<see cref="Text.Lettering.Modern"/>),
+    /// live; in a Japanese run, the Latin letters in the menus follow it. Dimmed when the
+    /// lettering is off for the run (KF2_TEXT=0) or the Text mod draws instead.</summary>
+    public static readonly PortSetting Font = new()
+    {
+        Key = Text.Lettering.FontKey, Envs = ["KF2_FONT"], Label = "Font",
+        Tip = "Modern: the port's lettering, with lower case, even spacing and redrawn signs and dialogue.\n" +
+              "Classic: the game's own letters, as the PlayStation drew them.",
+        Page = Gameplay, MenuLabel = "FONT", Steps = [0, 1], MenuValue = Named([0, 1], "CLASSIC", "MODERN"),
+        Names = ["Classic", "Modern"], Default = 1, Live = () => Text.Lettering.Modern ? 1 : 0,
+        Apply = v => Text.Lettering.Modern = v >= 0.5, Stored = Stored.Int, Ui = Ui.None,
+        Usable = () => Text.Lettering.Enabled && !Text.Lettering.StoodDown,
+    };
+
     /// <summary>Verdite Core's pause while the window is in the background; the
     /// Settings window's Gameplay tab only.</summary>
     public static readonly PortSetting FocusPauseOn = Switch(FocusPause.OnKey, "KF2_FOCUS_PAUSE", "Pause in the background",
@@ -471,7 +485,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRateRow,
         TextureFilter, PerPixel, AmbientOcclusionRow, ShadingRow,
         RenderDist, FogMode, Water,
-        Language, AutoReloadOn, GearCompareOn, EnemyTurnSpeed,
+        Language, Font, AutoReloadOn, GearCompareOn, EnemyTurnSpeed,
         ControlsRow, InvertedCamera, StickSens, MouseSens, Gyro, RumbleRow,
         Positional,
     ];
@@ -483,7 +497,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRate, Smoothing,
         Mipmaps, Anisotropy, PerPixel, Ao, AoQuality, NoDitherOn, TrueColorOn,
         RenderDist, FogMode, MurkyWater, WaterWaves, Planar,
-        Language, AutoReloadOn, GearCompareOn, EnemyTurnSpeed, FocusPauseOn,
+        Language, Font, AutoReloadOn, GearCompareOn, EnemyTurnSpeed, FocusPauseOn,
         Controls, StickAccel, InvertedCamera, StickTurn, StickLook, MouseTurn, MouseLookSens, ItemTurnOn, ItemTurnGyro, GyroAimOn, RumbleOn, RumbleHd,
         Positional,
     ];

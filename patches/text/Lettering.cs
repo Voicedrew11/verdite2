@@ -18,6 +18,7 @@ namespace Kf2.Text;
 /// see "The game's text in new fonts" in docs/PATCHES_AND_MODS.md.
 ///
 ///     KF2_TEXT=0                 none of it: the game's own lettering (comparison)
+///     KF2_FONT=classic|modern    the FONT row's choice for this run (see Modern)
 ///     KF2_TEXT_PROBE=1           a line for each picture redrawn and each upload
 ///     KF2_TEXT_TEST=3:0,6:360    open these messages (file:entry) from the main loop,
 ///                                10 s in and then one after each closes
@@ -52,6 +53,7 @@ public static class Lettering
     public const string PropMenusKey = "kf2.text.proportional.menus";
     public const string ShadowPicturesKey = "kf2.text.shadow.pictures";
     public const string ShadowMenusKey = "kf2.text.shadow.menus";
+    public const string FontKey = "kf2.text.font";
 
     static readonly ModInfo _self = new()
     {
@@ -72,6 +74,22 @@ public static class Lettering
 
     public static bool Probe { get; private set; }
 
+    /// <summary>
+    /// PORT SETTINGS ▸ GAMEPLAY ▸ FONT: MODERN is the port's fonts (lower case, spacing,
+    /// shadows, the redrawn pictures), CLASSIC the game's own letters, as with KF2_TEXT=0
+    /// but switchable in play. This is the choice; the hooks read <see cref="Drawing"/>,
+    /// which follows it on the game thread at the next label or main-loop frame, where the
+    /// font pages are put back (<see cref="FollowFont"/>). A sign already shown keeps
+    /// its letters until the next one. Stored as 0 (classic) or 1 (modern).
+    /// </summary>
+    public static bool Modern { get; set; } = true;
+
+    /// <summary>The port's fonts are drawing: every hook committed and MODERN applied.</summary>
+    public static bool Drawing => Active && _modernApplied;
+
+    static bool _modernApplied = true;
+    static bool? _forcedFont;
+
     static bool _queued, _hooked;
     static readonly ConcurrentQueue<Action> _work = new();
     static readonly Dictionary<string, string> _strings = new();
@@ -80,8 +98,11 @@ public static class Lettering
     static long _testAt = -1;
     static bool _inMessage;
 
-    public static void Configure(string? enabled, string? probe, string? test)
+    public static void Configure(string? enabled, string? probe, string? test, string? font)
     {
+        if (string.Equals(font, "classic", StringComparison.OrdinalIgnoreCase)) _forcedFont = false;
+        else if (string.Equals(font, "modern", StringComparison.OrdinalIgnoreCase)) _forcedFont = true;
+        else if (!string.IsNullOrWhiteSpace(font)) Console.WriteLine($"[KF2] text: KF2_FONT is classic or modern, not '{font}'; ignored");
         if (!string.IsNullOrWhiteSpace(enabled)) Enabled = enabled != "0";
         if (!string.IsNullOrWhiteSpace(probe)) Probe = probe != "0";
         foreach (var part in (test ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
@@ -112,6 +133,8 @@ public static class Lettering
             Shadow.Menus = view.GetBool(ShadowMenusKey, false);
             GameText.NormalCase = view.GetBool(CaseKey, true);
             GameText.SetPictures(view.GetBool(PicturesKey, true));
+            Modern = _forcedFont ?? view.GetInt(FontKey, 1) != 0;
+            _modernApplied = Modern;
         });
         HookAttach.OnOverlayLoad("text", Attach);
     }
@@ -175,7 +198,7 @@ public static class Lettering
 
         _hooked = all.All(HookAttach.Installed);
         Console.WriteLine(_hooked
-            ? $"[KF2] text: on; pictures {(GameText.ShowPictures ? "redrawn" : "the disc's")}, " +
+            ? $"[KF2] text: on; font {(Modern ? "modern" : "classic")}, pictures {(GameText.ShowPictures ? "redrawn" : "the disc's")}, " +
               $"{(GameText.NormalCase ? "normal case" : "capitals")}, fonts in {Fonts.Folder}"
             : "[KF2] text: not every hook committed; retrying on the next overlay load");
         return _hooked;
@@ -186,14 +209,14 @@ public static class Lettering
     public static void BeforeUpload(CpuContext c, IMemory m)
     {
         // A Japanese run's pictures are the Japanese disc's own (Japanese.JapaneseMix).
-        if (StoodDown || Japanese.JapaneseDisc.Active) return;
+        if (!_modernApplied || StoodDown || Japanese.JapaneseDisc.Active) return;
         try { Pictures.BeforeUpload(m, c.A0); }
         catch (Exception e) { Console.WriteLine($"[KF2] text: picture: {e.Message}"); }
     }
 
     public static void BeforeLoadImage(CpuContext c, IMemory m)
     {
-        if (StoodDown) return;
+        if (StoodDown || !_modernApplied) return;   // classic: the game's upload is the disc's own letters
         try { MenuCells.BeforeLoadImage(c, m); }
         catch (Exception e) { Console.WriteLine($"[KF2] text: font: {e.Message}"); }
         if (Japanese.JapaneseDisc.Active) return;   // the messages in play are the Japanese disc's
@@ -204,18 +227,20 @@ public static class Lettering
     public static void DrawLabel(Action<CpuContext, IMemory> orig, CpuContext c, IMemory m)
     {
         if (StoodDown) { orig(c, m); return; }
+        FollowFont(c, m);
         if (Japanese.JapaneseMenu.TryDraw(c, m)) return;
+        if (!_modernApplied) { orig(c, m); return; }
         MenuLabels.Draw(orig, c, m);
     }
 
     public static void BeforeLink(CpuContext c, IMemory m)
     {
-        if (!StoodDown) Shadow.BeforeLink(c, m);
+        if (!StoodDown && _modernApplied) Shadow.BeforeLink(c, m);
     }
 
     public static void AfterLink(CpuContext c, IMemory m)
     {
-        if (StoodDown) return;
+        if (StoodDown || !_modernApplied) return;
         try { Shadow.AfterLink(m); }
         catch (Exception e) { Shadow.Menus = false; Console.WriteLine($"[KF2] text: menu shadow, switched off: {e.Message}"); }
     }
@@ -227,19 +252,19 @@ public static class Lettering
 
     public static void BeforePresent(CpuContext c, IMemory m)
     {
-        if (StoodDown) return;
+        if (StoodDown || !_modernApplied) return;
         try { Shadow.BeforePresent(m); }
         catch (Exception e) { Shadow.Pictures = false; Console.WriteLine($"[KF2] text: picture shadow, switched off: {e.Message}"); }
     }
 
     public static void BeforeHudSprite(CpuContext c, IMemory m)
     {
-        if (!StoodDown) Shadow.BeforeHudSprite(c, m);
+        if (!StoodDown && _modernApplied) Shadow.BeforeHudSprite(c, m);
     }
 
     public static void AfterHudSprite(CpuContext c, IMemory m)
     {
-        if (StoodDown) return;
+        if (StoodDown || !_modernApplied) return;
         try { Shadow.AfterHudSprite(m); }
         catch (Exception e) { Console.WriteLine($"[KF2] text: message shadow: {e.Message}"); }
     }
@@ -252,6 +277,7 @@ public static class Lettering
             try { work(); }
             catch (Exception e) { Console.WriteLine($"[KF2] text: {e.Message}"); }
         }
+        FollowFont(c, m);
         try { MenuCells.UploadOnce(c, m); }
         catch (Exception e) { Console.WriteLine($"[KF2] text: font: {e.Message}"); }
         if (!Japanese.JapaneseDisc.Active)
@@ -260,6 +286,23 @@ public static class Lettering
             catch (Exception e) { Console.WriteLine($"[KF2] text: on-screen messages: {e.Message}"); }
         }
         if (_tests.Count > 0) OpenTest(c, m);
+    }
+
+    /// <summary>On the game thread, from the main loop or the label routine (PORT SETTINGS is
+    /// in a menu, where the main loop does not run): the hooks follow the FONT choice, and
+    /// the font pages are put up again in its letters before this frame's labels are drawn.</summary>
+    static void FollowFont(CpuContext c, IMemory m)
+    {
+        if (Modern == _modernApplied) return;
+        _modernApplied = Modern;
+        MenuCells.Invalidate();
+        HudMessages.Invalidate();
+        Console.WriteLine($"[KF2] text: font {(Modern ? "modern" : "classic")}");
+        try { MenuCells.UploadOnce(c, m); }
+        catch (Exception e) { Console.WriteLine($"[KF2] text: font: {e.Message}"); }
+        if (Japanese.JapaneseDisc.Active) return;
+        try { HudMessages.UploadOnce(c, m); }
+        catch (Exception e) { Console.WriteLine($"[KF2] text: on-screen messages: {e.Message}"); }
     }
 
     public static void BeforeShow(CpuContext c, IMemory m) => _inMessage = true;

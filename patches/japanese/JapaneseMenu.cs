@@ -40,7 +40,13 @@ namespace Kf2.Japanese;
 ///     anything else                  by its US text: names, words, then the groups' words
 ///
 /// The card messages take the Japanese window's line count and size too, because the
-/// Japanese program splits its sentences over more lines. See docs/JAPANESE.md.
+/// Japanese program splits its sentences over more lines.
+///
+/// The Japanese font's own Latin letters and digits (<see cref="Latin"/>: HP, MP, On,
+/// Off, the file numbers) are full-width cells; they are drawn instead from the US label
+/// font, which is on the same page, in the US routine's 8 x 15 cells, 7 px apart or as
+/// the port's lettering spaces them, in the letters the FONT row chose: the port's
+/// (lower case and all) on MODERN, the disc's capitals on CLASSIC. See docs/JAPANESE.md.
 /// </summary>
 public static class JapaneseMenu
 {
@@ -62,6 +68,23 @@ public static class JapaneseMenu
     const int DakutenBit = 0x1000, HandakutenBit = 0x2000, GlyphMask = 0xFFF;
     const int DakutenGlyph = 0x2E, HandakutenGlyph = 0x2F;
     const int BlankGlyph = 0xFF;
+
+    /// <summary>The Japanese label font's Latin cells (FDAT.T entry 47, page (832, 256)):
+    /// row 0xE0 N E W H M P 1-8, row 0xF0 "On" "Off", and C D at 0x10D. Read off the page
+    /// of all three Japanese discs, which is the same on each.</summary>
+    static readonly Dictionary<int, char> Latin = new()
+    {
+        [0xE0] = 'N', [0xE1] = 'E', [0xE2] = 'W', [0xE3] = 'H', [0xE4] = 'M', [0xE5] = 'P',
+        [0xE6] = '1', [0xE7] = '2', [0xE8] = '3', [0xE9] = '4', [0xEA] = '5', [0xEB] = '6', [0xEC] = '7', [0xED] = '8',
+        [0xF0] = 'O', [0xF1] = 'n', [0xF2] = 'O', [0xF3] = 'f', [0xF4] = 'f',
+        [0x10D] = 'C', [0x10E] = 'D',
+    };
+
+    /// <summary>The US label routine's step and cell (func_80021E10): u = (g &amp; 15) * 8, v = (g &gt;&gt; 4) * 15.</summary>
+    const int UsAdvance = 7, UsCellU = 8, UsCellV = 15;
+
+    /// <summary>Between a run of Latin letters and the Japanese cell after it.</summary>
+    const int LatinGap = 1;
 
     /// <summary>The card messages' records, in a slot each of the port's region (PrimBuffer.TextScratch).</summary>
     const int MessageSlotBytes = JapaneseMenuText.RecordBytes * 6;
@@ -370,18 +393,81 @@ public static class JapaneseMenu
     // ---- drawing ----
 
     /// <summary>The Japanese label routine's primitives for a string of codes: a cell per code,
-    /// and an accent's cell over it.</summary>
+    /// and an accent's cell over it; a run of Latin letters in the US font's cells. A label
+    /// right-aligned by leading blanks still ends where the Japanese routine's would.</summary>
     static void Draw(CpuContext c, IMemory m, uint template, int x, int y, ushort[] codes)
     {
-        for (int i = 0; i < codes.Length; i++)
+        var cells = Layout(codes, out int width);
+        if (codes.Length > 0 && (codes[0] & GlyphMask) == BlankGlyph) x += codes.Length * PenStep - width;
+        foreach (var (code, us, at) in cells)
         {
-            int pen = x + i * PenStep;
-            int code = codes[i];
+            int pen = x + at;
+            if (us >= 0) { DrawUsCell(c, m, template, us, pen, y); continue; }
             int glyph = code & GlyphMask;
             if (glyph != BlankGlyph) DrawCell(c, m, template, glyph, pen, y);
             if ((code & DakutenBit) != 0) DrawCell(c, m, template, DakutenGlyph, pen, y);
             if ((code & HandakutenBit) != 0) DrawCell(c, m, template, HandakutenGlyph, pen, y);
         }
+    }
+
+    /// <summary>Each code's place from the label's origin, and the US cell it draws (-1 for a
+    /// Japanese cell); <paramref name="width"/> is where the next label cell would go.</summary>
+    static List<(int Code, int UsCell, int X)> Layout(ushort[] codes, out int width)
+    {
+        var cells = new List<(int, int, int)>(codes.Length);
+        int pen = 0;
+        for (int i = 0; i < codes.Length;)
+        {
+            if (!Latin.ContainsKey(codes[i]))
+            {
+                cells.Add((codes[i], -1, pen));
+                pen += PenStep;
+                i++;
+                continue;
+            }
+            var run = new List<byte>();
+            for (; i < codes.Length && Latin.TryGetValue(codes[i], out char ch); i++) run.Add(UsCell(ch));
+            var at = Text.Lettering.Drawing ? Text.MenuLabels.Place(run, out int runWidth) : Classic(run.Count, out runWidth);
+            for (int k = 0; k < run.Count; k++) cells.Add((-1, run[k], pen + at[k]));
+            pen += runWidth + (i < codes.Length ? LatinGap : 0);
+        }
+        width = pen;
+        return cells;
+    }
+
+    static int[] Classic(int count, out int width)
+    {
+        var at = new int[count];
+        for (int k = 0; k < count; k++) at[k] = k * UsAdvance;
+        width = count * UsAdvance;
+        return at;
+    }
+
+    /// <summary>The US label font's cell for a Latin letter: the port's letters on MODERN
+    /// (lower case once they are in VRAM), the disc's capitals on CLASSIC.</summary>
+    static byte UsCell(char ch)
+    {
+        if (Text.Lettering.Drawing && Text.MenuCells.Index(ch) is >= 0 and var cell) return (byte)cell;
+        return (byte)Text.MenuCells.DiscCells[char.ToUpperInvariant(ch)];
+    }
+
+    /// <summary>One cell of the US font, as func_80021E10 builds it: the template's tpage,
+    /// CLUT and cell size (+8, +0xA).</summary>
+    static void DrawUsCell(CpuContext c, IMemory m, uint template, int cell, int x, int y)
+    {
+        int w = m.ReadU8(template + 8), h = m.ReadU8(template + 0xA);
+        int u = (cell & 15) * UsCellU, v = (cell >> 4) * UsCellV;
+
+        KingsField2.func_800229D8(c, m);
+        uint prim = m.ReadU32(PrimCursor);
+        m.WriteU16(prim + 0x16, m.ReadU16(template));
+        m.WriteU16(prim + 0x0E, m.ReadU16(template + 2));
+        Corner(m, prim + 0x08, x, y, u, v);
+        Corner(m, prim + 0x10, x + w, y, u + w, v);
+        Corner(m, prim + 0x18, x, y + h, u, v + h);
+        Corner(m, prim + 0x20, x + w, y + h, u + w, v + h);
+        c.A0 = LabelSlot;
+        KingsField2.func_80022A28(c, m);
     }
 
     /// <summary>One cell, as func_80021E10 builds it: a POLY_FT4 from the cursor, the template's

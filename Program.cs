@@ -363,9 +363,11 @@ Kf2.MenuWorld.Install();
 //     KF2_TEXT=0               the game's own lettering -- comparison only
 //     KF2_TEXT_PROBE=1         a line for each picture redrawn
 //     KF2_TEXT_TEST=3:0,6:360  open these messages from the main loop (KF2_AUTOPAD dismisses)
+//     KF2_FONT=classic|modern  PORT SETTINGS' FONT for this run
 Kf2.Text.Lettering.Configure(Environment.GetEnvironmentVariable("KF2_TEXT"),
                              Environment.GetEnvironmentVariable("KF2_TEXT_PROBE"),
-                             Environment.GetEnvironmentVariable("KF2_TEXT_TEST"));
+                             Environment.GetEnvironmentVariable("KF2_TEXT_TEST"),
+                             Environment.GetEnvironmentVariable("KF2_FONT"));
 Kf2.Text.Lettering.Install();
 
 // The Japanese language: the Japanese King's Field II's pictures, messages and menu
