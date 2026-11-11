@@ -3985,6 +3985,47 @@ weapon sub menu opened on the equipped id `0x01`, entry 1 of 3 (the game's is en
 reached**: the Magic page with a spell in it (slot 2 knows none), attack magic and the
 second slot with something equipped. Ships off until it is played.
 
+## Shortcuts
+
+**Off by default; assigning and loading measured, using not tried.** The game's Select
+shortcut, five times over: any of the five holds an item, an attack spell or a support
+spell, used with one press through the game's own Select code, so MP, the gauge, item
+counts and "use it on what is in front of you" all hold. Shortcut 1 is the game's
+Select itself. Keys 1-5, or Select and the d-pad (Up, Down, Left, Right); a d-pad
+direction given to a shortcut stops walking and turning in the world, not in menus.
+Assigned from Equipment's Select row (HOTKEYS with keyboard labels): pick, answer Yes,
+then a second list asks which shortcut. Gameplay ▸ *Shortcuts*, with the mod's page under
+it (labels, a key and a pad button per shortcut, the d-pad); PORT SETTINGS ▸ CONTROLS ▸
+SHORTCUTS (GAMEPLAY is full at seven rows; the check refuses an eighth at start);
+`kf2.shortcuts.on`, `KF2_SHORTCUTS=0|1`, `KF2_SHORTCUTS_PROBE=1` a line for each
+assignment, shortcut fired and card load. Brought in from the Shortcuts mod
+(`kf2.shortcuts`) of PerdueEgg's verdite2-mods (https://github.com/PerdueEgg/verdite2-mods,
+`mods/shortcuts`, at `12df02b`), 2026-11-11, at the user's request; `patches/shortcuts/`
+(`Shortcuts.cs` the hooks, `Picker.cs` the which-shortcut list, `Labels.cs` the words,
+`CardFiles.cs` the files), entry `Shortcuts`. The logic is the mod's; `Shortcuts.cs`
+carries its reading of the shortcut page, the setters and player control.
+
+- **Words through the game's label routine.** Names are copied cell for cell from the
+  name slots, and the port's own words encoded through the `kf2.text` slot that
+  `Lettering` publishes (or the Text mod, enabled in its place), so the lettering, the
+  Retranslation's names and a `shortcuts:` string-table key apply.
+- **The files are the mod's**: `shortcuts_slotN.txt` beside the cards (the working
+  directory; gitignored for a dev run), written on a card save while it is on or anything
+  is assigned, read on every card load, cleared by a new game or a death without Seath's
+  Tear. A player's shortcuts from the mod carry over, and its keys too.
+- **The settings page reads no guest memory**: what each shortcut holds is copied on the
+  game thread at each control tick, and a Clear goes through the same lock.
+- Stands down while the mod is enabled.
+
+Measured 2026-11-11, slot 2 in fdat05, through `KF2_SHELL`: `9/9 hooked`; Equipment ▸
+the Select row ▸ the first entry ▸ Yes opened the which-shortcut list (5 rows, the menu
+pointer driving it), and a click on its second row logged `item 0x47 -> shortcut 2`
+and returned to Equipment; a `shortcuts_slot2.txt` of `-1,71` / `3,-1` loaded as
+`FF/47 03/FF FF/FF FF/FF` at autostart and on `load 2`. `scripts/fuzz.py --runs 12 --env
+KF2_SHORTCUTS=1`: 240,000 frames, no findings. **Not tried**: firing a shortcut (a key or
+pad button is polled from the host, which nothing headless presses), the d-pad takeover,
+a card save writing the file, a Japanese run, the picture of the list.
+
 ## NPC dialogue
 
 **Off by default; mechanism attached, never played in the port.** King's Field III's
