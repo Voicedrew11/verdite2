@@ -990,9 +990,11 @@ public sealed partial class GlCore
     unsafe bool SortWater(RetainedScene.Frame f, in RetainedScene.View v, byte[] halves)
     {
         var st = RetainedScene.Static;
-        if (_wCentreGen != RetainedScene.StaticGeneration)
+        // A patch moves corners too; recomputed whole (a millisecond), since a quad's
+        // two triangles may sit in two chunks.
+        if (_wCentreGen != RetainedScene.StaticRevision)
         {
-            _wCentreGen = RetainedScene.StaticGeneration;
+            _wCentreGen = RetainedScene.StaticRevision;
             if (_wCentre.Length < st.Length) _wCentre = new float[st.Length];
             for (int i = RetainedScene.StaticStart[1]; i + 2 < st.Length; i += 3)
             {

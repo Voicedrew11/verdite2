@@ -2070,6 +2070,27 @@ Four files in the directory have no entry below:
   saved on exit, so swapping them in memory would have been saved). Measured in KF2:
   builds, and a headless Japanese run reaches an area through `KF2_AUTOSTART`. **Not
   tried on a pad.** **No recompile.**
+- `0113-static-by-chunk.patch` — the retained static map patched by chunk.
+  `RetainedScene.SetStatic` lays each (range, chunk) slot out with spare room after
+  its corners (`ChunkCap`: an eighth more, at least 16 triangles), the room all zero,
+  so three spare corners are a degenerate triangle that draws nothing
+  (`RetainedScene.IsPad`; a map corner always carries `FlagRect`). The new
+  `PatchStatic(tris, chunks)` takes the whole map as before plus the chunks that may
+  have changed; it rewrites those chunks, and any whose count moved, in their slots,
+  with their bounds, records and fog, and refuses (the caller lays out whole) when a
+  slot's corners outgrow its room. `StaticGeneration` now means a new layout;
+  `StaticRevision` bumps on every change, and `DirtySince(revision, list)` gives the
+  ranges rewritten since. The backend follows: `UploadStatic` sends only those
+  ranges with `BufferSubData`; the mip keys are refreshed over them and `IndexHalfKeys`
+  is a counting pass instead of a sort; the water's centres and the shadows' cubemaps
+  key on the revision; `DrawStaticChunks` joins neighbouring visible chunks across
+  their spare room. `VerifyStatic(tris)` lays the same map out whole and compares every
+  slot and chunk, then puts the patched layout back. Measured in KF2 (area 1, nine
+  tiles changed near the player every 2 s): the upload 4.6-5.1 ms whole to 0.1 ms, the
+  mip refresh 3.0-4.8 ms to 0.9-1.6 ms, the scene's part of a patch 1.1-1.7 ms, every
+  patch matching a whole layout; the picture hash identical to the build before at
+  three spots; 144.0 fps drawn at 14.9-15.0 ticks/s, no GL error under `KF2_GLDEBUG=1`.
+  **No recompile.**
 
 ## Package bumps
 
