@@ -8,8 +8,10 @@ namespace Kf2.Shortcuts;
 /// left the magic hand, the right the weapon hand, the one between them and lower the
 /// hotkey Square uses. Each card is the HP panel's own frame (<see cref="CardFrame"/>)
 /// round the item's model (<see cref="HandsIcons"/>; a spell shows its element's
-/// crystal and its level as a Roman numeral). A hand's card has the number of the slot
-/// that is out in its top right corner, an item hotkey its count in the bottom right.
+/// crystal and its level as a Roman numeral). A hand's card has its button over the
+/// frame at its outer top corner, LB the magic hand's and RB the weapon hand's (the pad's
+/// L1 casts and R1 swings, <see cref="PadLayout"/>); an item hotkey its count in the
+/// bottom right.
 ///
 /// Laid out in the game's pixels to work at 240p: the cards are 28 x 42, a pixel apart,
 /// as wide together as the HP panel, their bevel BevelLess pixels a side narrower than the
@@ -81,8 +83,6 @@ static class HandsHud
         int handsY = bottom - Drop - CardHeight, hotkeyY = bottom - CardHeight;
         int magicX = left, hotkeyX = left + CardWidth + Gap, weaponX = left + 2 * (CardWidth + Gap);
 
-        var right = Hands.Right;
-        var hand = Hands.Left;
         byte weapon = m.ReadU8(Hands.Weapon), spell = m.ReadU8(Hands.AttackSpell);
         var (hSpell, hItem) = Labels.Held(m, Shortcuts.Hotkey);
 
@@ -100,8 +100,8 @@ static class HandsHud
         else if (hItem != Shortcuts.None) Icon(c, m, d, HotkeyIcon, hItem, hotkeyX, hotkeyY, z);
         if (!HasRoom(m, d)) return;
 
-        if (hand.Away != Shortcuts.None || spell != Shortcuts.None) SlotNumber(m, magicX, handsY, hand.Out);
-        if (right.Away != Shortcuts.None || weapon != Shortcuts.None) SlotNumber(m, weaponX, handsY, right.Out);
+        Capitals(m, magicX, handsY, "LB");
+        Capitals(m, weaponX + CardWidth - CapitalsWidth("RB"), handsY, "RB");
         if (spell != Shortcuts.None) Numeral(m, magicX, handsY, SpellCrystals.Level(m, spell));
         if (hSpell != Shortcuts.None) Numeral(m, hotkeyX, hotkeyY, SpellCrystals.Level(m, hSpell));
         else if (hItem != Shortcuts.None) Count(m, hotkeyX, hotkeyY, m.ReadU8(Hands.Inventory + hItem));
@@ -140,13 +140,6 @@ static class HandsHud
         HandsIcons.Draw(c, m, slot, ix + iw / 2, iy + ih / 2, Math.Min(iw, ih), z);
     }
 
-    /// <summary>The number of the slot that is out, in the inside's top right corner.</summary>
-    static void SlotNumber(IMemory m, int x, int y, int outSlot)
-    {
-        var (ix, iy, iw, _) = Inside(x, y);
-        Digit(m, ix + iw - DigitWidth(m), iy, (byte)(outSlot + 1));
-    }
-
     /// <summary>A count, right-aligned in the inside's bottom right corner.</summary>
     static void Count(IMemory m, int x, int y, int count)
     {
@@ -157,22 +150,34 @@ static class HandsHud
         for (int i = 0; i < digits.Length; i++) Digit(m, at + i * w, iy + ih - h, digits[i]);
     }
 
-    /// <summary>A spell's level as a Roman numeral in the inside's bottom left corner, in
-    /// the menu's capitals at their own size, an I narrower than its cell.</summary>
+    /// <summary>A spell's level as a Roman numeral in the inside's bottom left corner.</summary>
     static void Numeral(IMemory m, int x, int y, int level)
     {
-        const int NarrowAdvance = 4, WideAdvance = 8;
         var (ix, iy, _, ih) = Inside(x, y);
+        Capitals(m, ix, iy + ih - (short)m.ReadU16(TextTemplate + 0xA), SpellCrystals.Roman(level));
+    }
+
+    const int CellWidth = 8, NarrowAdvance = 4;
+
+    /// <summary>Capital letters in the menu's font at their own size, top left at (x, y),
+    /// an I advanced less than its cell.</summary>
+    static void Capitals(IMemory m, int x, int y, string text)
+    {
         int w = (short)m.ReadU16(TextTemplate + 8), h = (short)m.ReadU16(TextTemplate + 0xA);
         int uw = m.ReadU8(TextTemplate + 8), vh = m.ReadU8(TextTemplate + 0xA);
-        int cx = ix, cy = iy + ih - h;
-        foreach (char ch in SpellCrystals.Roman(level))
+        foreach (char ch in text)
         {
             int g = ch - 'A';                                // the disc's capitals, cells 0-25
-            MenuDraw.Quad(m, TextTemplate, cx, cy, w, h, (g & 15) * 8, (g >> 4) * 15, uw, vh, White, false, Slot);
-            cx += ch == 'I' ? NarrowAdvance : WideAdvance;
+            MenuDraw.Quad(m, TextTemplate, x, y, w, h, (g & 15) * 8, (g >> 4) * 15, uw, vh, White, false, Slot);
+            x += Advance(ch);
         }
     }
+
+    /// <summary>How wide <see cref="Capitals"/> draws <paramref name="text"/>.</summary>
+    static int CapitalsWidth(string text) =>
+        text.Length == 0 ? 0 : text[..^1].Sum(Advance) + CellWidth;
+
+    static int Advance(char ch) => ch == 'I' ? NarrowAdvance : CellWidth;
 
     static int DigitWidth(IMemory m) => (short)m.ReadU16(NumberTemplate + 8);
 
