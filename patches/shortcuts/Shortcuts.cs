@@ -631,6 +631,17 @@ public static class Shortcuts
         var m = RecompOne.Runtime.Runtime.Mem;
         if (m == null) return "{\"ok\":false,\"error\":\"not running\"}";
         arg = arg.Trim().ToLowerInvariant();
+        if (arg == "records")
+        {
+            var rows = new List<string>();
+            for (uint i = 0; i < 20; i++)
+            {
+                var b = new byte[26];
+                for (uint k = 0; k < 26; k++) b[k] = m.ReadU8(0x8019C5EC + i * 26 + k);
+                rows.Add("\"" + Convert.ToHexString(b) + "\"");
+            }
+            return "{\"ok\":true,\"records\":[" + string.Join(",", rows) + "]}";
+        }
         string? error = null;
         if (arg.StartsWith("weapon:") || arg.StartsWith("spell:"))
         {

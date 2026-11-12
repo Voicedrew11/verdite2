@@ -4049,16 +4049,34 @@ swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
   (where the game's 2D HUD sprites go), text linked before the boxes so it draws over
   them; `MenuDraw.Quad` is the new any-size quad.
 - **The icons are the items' own models** (`HandsIcons`). The game has no 2D icons; its
-  HUD is small models drawn without perspective, and so are these: the builder's steps
-  for one record (its light record, `RotMatrix`, `ScaleMatrix`, `func_8002E1F0`, the
-  orthographic `func_8002E910`, the lit `func_8002F214`), with the current model pointed
-  for the call at a TMD of the port's. Each is read with the preview's own routines
-  (`func_80017F1C(6, id, 0)` its size, `func_800183A0(6, id, dst)`, then the fix-up
-  `func_8002E314`) into a slot of `PrimBuffer.IconScratch` (`0x30000` bytes past the
-  card messages, three slots), at a control tick and only when the box's item changes;
-  scaled from its vertices' box to fit, turned about its middle at the preview's speed
-  on the clock, tipped toward the eye. A spell has no model and shows its name in
-  half-size letters instead (as does an item whose model would not read).
+  HUD is small models drawn without perspective, and so are these: the orthographic
+  `func_8002E910` and the lit `func_8002F214`, with the current model pointed for the
+  call at a TMD of the port's, lit as the menu's preview lights its model
+  (`func_8002156C`: back colour 60, a white colour matrix, its fixed light matrix turned
+  with the model; the HUD's own light records left them too dark). Each is read with the
+  preview's own routines (`func_80017F1C(6, id, 0)` its size, `func_800183A0(6, id, dst)`,
+  then the fix-up `func_8002E314`) into a slot of `PrimBuffer.IconScratch` (`0x30000`
+  bytes past the card messages, three slots: weapon, magic, hotkey), at a control tick
+  and only when the box's item changes. **The pose is worked out once, at the read, and
+  held still**: a weapon is stood on its longest axis, turned so its vertices spread
+  widest across it (the flat of the blade to the eye; the box's area hardly moves with a
+  blade's thickness, and picked the edge), and laid on the diagonal with its narrow end
+  (the point; the guard is the wide end) up and right; anything else is turned to show
+  the largest box and tipped 22 degrees toward the eye. The matrix is built in C#, so
+  the box it is measured in is the box it is drawn in: the projected corners fill 24 of
+  the box's 30 pixels, centred. (The first version spun each model and scaled it by its
+  3D radius, which left a dagger a sliver.)
+- **A spell is its crystal and a level** (`SpellCrystals`): the item model of its
+  element's crystal (FIRE, WATER, EARTH, WIND, LIGHT, DARK CRYSTAL, items 90-95) with a
+  Roman numeral in the box's corner, its rank by MP cost (record `+0x16` at
+  `0x8019C5EC + id * 26`) among its element's spells, cheapest I. The game keeps no
+  element for a spell (a record is a damage per kind and the cost), so the element is
+  the port's reading of the name, and a table to move a spell: water WATER FALL, ICE
+  STORM, FREEZE, DISPOISON; earth STONE, EARTH WAVE, METEOR, EARTH HEAL; wind WIND
+  CUTTER, MISSILE SHIELD, BREATH; fire FIRE BALL, FIRE WALL, FIRE STORM, FLAME, RESIST
+  FIRE; light LIGHTNING VOLT, FLASH, LIGHT; dark SEATH. So WIND CUTTER (3 MP) is WIND I,
+  METEOR EARTH IV, LIGHTNING VOLT LIGHT II. A hotkey holding a spell shows the same.
+  `hands records` dumps the twenty records.
 - **Files.** `shortcuts_slotN.txt`, the mod's own format, for hotkeys 2-5;
   `hands_slotN.txt`, one line `rightOut,rightAway,leftOut,leftAway,hotkey` (-1 none),
   for the rest, beside it. Written on a card save while on or anything is kept, read on
@@ -4076,8 +4094,12 @@ radius 183) and `hands use` used one (count 2 to 1). Windowed with the HUD drawi
 `KF2_FPS=144 KF2_FPS_PROBE=1`: 144.0 fps drawn at 15.0 ticks/s, `KF2_PRESENT_PROBE` wide
 288. **Not tried**: a physical pad (R1, L1, Square, the d-pad, the bow held on R1, the
 d-pad in menus), the assignment pickers on the weapon and magic pages, a card save
-writing `hands_slotN.txt`, a Japanese run. **Not judged**: the boxes, the icons (whether
-each item's texture page is in VRAM in play is unchecked), the small letters.
+writing `hands_slotN.txt`, a Japanese run. **Not judged** by the user yet: the boxes, the icons, the small letters.
+
+Snapped 2026-11-11 (`snap`, windowed, HUD anchored): the textures are in VRAM in play;
+WIND I, EARTH IV, LIGHT II, DARK I and FIRE I crystals, the BLOOD STONE, the dagger
+and the short sword (after the spread fix) each fill their box with the numerals and
+slot numbers clear of them; the name line in the full-size menu font.
 
 ## NPC dialogue
 

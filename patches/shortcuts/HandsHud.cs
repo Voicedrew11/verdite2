@@ -40,15 +40,19 @@ static class HandsHud
     const double BorderScale = 0.3;
 
     /// <summary>The icon slots of <see cref="HandsIcons"/>.</summary>
-    const int WeaponIcon = 0, HotkeyIcon = 1;
+    const int WeaponIcon = 0, HotkeyIcon = 1, MagicIcon = 2;
+
+    /// <summary>How much of a box an icon fills, in pixels.</summary>
+    const int IconSize = Box - 6;
 
     /// <summary>Called from player control's pre-hook: reads the models the boxes will
-    /// want, so the draw never touches the disc.</summary>
+    /// want, so the draw never touches the disc. A spell's model is its crystal.</summary>
     internal static void Prepare(CpuContext c, IMemory m, bool probe)
     {
         HandsIcons.Want(c, m, WeaponIcon, m.ReadU8(Hands.Weapon), probe);
+        HandsIcons.Want(c, m, MagicIcon, SpellCrystals.Crystal(m.ReadU8(Hands.AttackSpell)), probe);
         var (spell, item) = Labels.Held(m, Shortcuts.Hotkey);
-        HandsIcons.Want(c, m, HotkeyIcon, spell == Shortcuts.None ? item : Shortcuts.None, probe);
+        HandsIcons.Want(c, m, HotkeyIcon, spell != Shortcuts.None ? SpellCrystals.Crystal(spell) : item, probe);
     }
 
     internal static void Draw(CpuContext c, IMemory m)
@@ -60,7 +64,6 @@ static class HandsHud
         m.WriteU32(MenuDraw.Cursor, at);
 
         int x0 = Widescreen.AnchorHud && Widescreen.On ? -Widescreen.Margin : 0;
-        int light = m.ReadU8(Stage13.HudRecords + Stage13.HudStride + 2);           // the HP panel's light
         int z = (short)m.ReadU16(Stage13.HudRecords + Stage13.HudStride + 0x14);
 
         var right = Hands.Right;
@@ -72,12 +75,17 @@ static class HandsHud
         // Text first: within a slot the last linked is drawn first, so the boxes go under.
         if (right.Away != Shortcuts.None || weapon != Shortcuts.None) SlotNumber(m, x0 + RightX, Top, right.Out);
         if (left.Away != Shortcuts.None || spell != Shortcuts.None) SlotNumber(m, x0 + LeftX, Top, left.Out);
-        if (spell != Shortcuts.None) SmallName(m, x0 + LeftX, Top, Labels.Name(m, spell, Shortcuts.None));
-        if (hSpell != Shortcuts.None) SmallName(m, x0 + BottomX, BottomY, Labels.Name(m, hSpell, Shortcuts.None));
+        if (spell != Shortcuts.None) Numeral(m, x0 + LeftX, Top, SpellCrystals.Level(m, spell));
+        if (hSpell != Shortcuts.None) Numeral(m, x0 + BottomX, BottomY, SpellCrystals.Level(m, hSpell));
         NameLine(m, x0, weapon, spell, hSpell, hItem);
 
-        if (weapon != Shortcuts.None) Icon(c, m, WeaponIcon, weapon, x0 + RightX, Top, light, z);
-        if (hSpell == Shortcuts.None && hItem != Shortcuts.None) Icon(c, m, HotkeyIcon, hItem, x0 + BottomX, BottomY, light, z);
+        if (weapon != Shortcuts.None) Icon(c, m, WeaponIcon, weapon, x0 + RightX, Top, z, Labels.Name(m, Shortcuts.None, weapon));
+        if (spell != Shortcuts.None)
+            Icon(c, m, MagicIcon, SpellCrystals.Crystal(spell), x0 + LeftX, Top, z, Labels.Name(m, spell, Shortcuts.None));
+        if (hSpell != Shortcuts.None)
+            Icon(c, m, HotkeyIcon, SpellCrystals.Crystal(hSpell), x0 + BottomX, BottomY, z, Labels.Name(m, hSpell, Shortcuts.None));
+        else if (hItem != Shortcuts.None)
+            Icon(c, m, HotkeyIcon, hItem, x0 + BottomX, BottomY, z, Labels.Name(m, Shortcuts.None, hItem));
         // The model assembler moves the frame's cursor and not the menu's mirror of it.
         m.WriteU32(MenuDraw.Cursor, m.ReadU32(d + 8));
         if (m.ReadU32(d + 4) - m.ReadU32(d + 8) < 9 * 3 * MenuDraw.QuadBytes) return;
@@ -87,15 +95,35 @@ static class HandsHud
         Border(m, x0 + BottomX, BottomY, Box, Box);
     }
 
-    static void Icon(CpuContext c, IMemory m, int slot, byte item, int x, int y, int light, int z)
+    /// <summary>The model of <paramref name="item"/> filling the box, or, if it has none
+    /// ready, <paramref name="fallback"/> in small letters.</summary>
+    static void Icon(CpuContext c, IMemory m, int slot, byte item, int x, int y, int z, byte[]? fallback)
     {
         if (HandsIcons.Ready(slot, item))
         {
             uint d = m.ReadU32(Descriptor);
-            HandsIcons.Draw(c, m, slot, x + Box / 2, y + Box / 2, Box / 2 - 4, light, z);
+            HandsIcons.Draw(c, m, slot, x + Box / 2, y + Box / 2, IconSize, z);
             m.WriteU32(MenuDraw.Cursor, m.ReadU32(d + 8));
         }
-        else SmallName(m, x, y, Labels.Name(m, Shortcuts.None, item));
+        else SmallName(m, x, y, fallback);
+    }
+
+    /// <summary>A spell's level as a Roman numeral, in the box's bottom corner.</summary>
+    static void Numeral(IMemory m, int x, int y, int level)
+    {
+        const double Scale = 0.7;
+        const int Advance = 5;
+        string roman = SpellCrystals.Roman(level);
+        int w = (short)m.ReadU16(TextTemplate + 8), h = (short)m.ReadU16(TextTemplate + 0xA);
+        int uw = m.ReadU8(TextTemplate + 8), vh = m.ReadU8(TextTemplate + 0xA);
+        int sw = (int)Math.Round(w * Scale), sh = (int)Math.Round(h * Scale);
+        int cx = x + 3, cy = y + Box - sh - 2;
+        foreach (char ch in roman)
+        {
+            int g = ch - 'A';                                // the disc's capitals, cells 0-25
+            MenuDraw.Quad(m, TextTemplate, cx, cy, sw, sh, (g & 15) * 8, (g >> 4) * 15, uw, vh, White, false, Slot);
+            cx += Advance;
+        }
     }
 
     /// <summary>The line under the cross: what a hand just took out, else the hotkey.</summary>

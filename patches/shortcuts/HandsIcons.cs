@@ -5,11 +5,19 @@ using KingsField2 = Recompiled.KingsField2_game;
 namespace Kf2.Shortcuts;
 
 /// <summary>
-/// The HUD boxes' icons: each item's own model, the one the menu's preview spins, kept
-/// turning in its box. The game has no 2D icons; its HUD (the compass, the HP digits) is
-/// small models drawn without perspective, and these are drawn the same way, through the
-/// HUD builder's own steps (func_80031D5C): its light record, the orthographic transform
-/// func_8002E910 and the lit assembler func_8002F214 onto the front of the table.
+/// The HUD boxes' icons: each item's own model, the one the menu's preview shows, posed
+/// once and framed to fill its box. The game has no 2D icons; its HUD (the compass, the
+/// HP digits) is small models drawn without perspective, and these are drawn the same
+/// way: the orthographic transform func_8002E910 and the lit assembler func_8002F214 onto
+/// the front of the table, lit as the preview lights its model (func_8002156C: back
+/// colour 60, a white colour matrix, its fixed light matrix turned with the model).
+///
+/// The pose, worked out once when a model is read: a weapon lies on the diagonal, its
+/// narrow end (the point) up and right, as an inventory icon shows a sword; anything
+/// else stands as it is, tipped a little toward the eye. Either way the turn about the
+/// vertical is the one that shows the most of it. The matrix is built here, so the box
+/// it is measured into is the box it is drawn into: the model's projected corners fill
+/// the box, centred.
 ///
 /// The models: the menu's preview loads one at a time into bank 3 off the model heap
 /// (func_80022CAC: disc file 6, entry = the item id). Three are needed at once, so each
@@ -25,20 +33,32 @@ static class HandsIcons
 {
     const uint CurrentModel = 0x8018E19C;                    // the model func_8002E1BC indexes
     const uint VertexBase = 0x8018EAA0;                      // what func_8002E910 reads
-    const uint LightRecords = 0x801930F0;                    // 0x68 bytes each
     const uint FakeRa = 0x8001FFF4;
     const int ItemFile = 6, ItemCount = 120;
+    const int WeaponIds = 18;                                // swords, axes, blades, the bow, the arbalest
     const int Slots = 3;
     const uint SlotBytes = PrimBuffer.IconBytes / Slots;
-    const int TmdHeader = 0xC, ObjectBytes = 28;
+    const int TmdHeader = 0xC;
+    const int MaxVertices = 4096;
 
-    /// <summary>One slot: the item it holds (0xFF none), whether that loaded, and the
-    /// model's extent, for its scale.</summary>
+    // The preview's light (func_8002156C): back colour 60, every colour 1.0, and this
+    // matrix times the model's turn.
+    const int Back = 60, PreviewFog = 0x59D8;
+    static readonly int[] PreviewLight = [0x800, 0x800, -0x800, 0, 0, -0x800, 0x1000, 0, -0x800];
+
+    const int Diagonal = 0x200;                              // 45 degrees, in 4096ths of a turn
+    const int Tip = 0x100;                                   // what a standing item is tipped toward the eye
+
+    /// <summary>One slot: the item it holds (0xFF none), whether that loaded, and the pose
+    /// worked out for it: its turn, the scale that fills a unit box, and the middle of its
+    /// projected corners at that scale.</summary>
     struct Slot
     {
         public byte Item;
         public bool Ready;
-        public int CentreX, CentreY, CentreZ, Radius;
+        public int[] Turn;                                   // 3x3, 4.12
+        public double Fill;                                  // scale per pixel of box
+        public double MidX, MidY;                            // projected middle per unit of scale
     }
 
     static readonly Slot[] _slots = [new() { Item = 0xFF }, new() { Item = 0xFF }, new() { Item = 0xFF }];
@@ -73,98 +93,182 @@ static class HandsIcons
         }
         finally { c.Restore(snap); }
 
-        if (!Measure(m, dst, out var s))
+        var verts = Vertices(m, dst);
+        if (verts == null)
         {
             _failed.Add(item);
             Console.Error.WriteLine($"[KF2] shortcuts: item 0x{item:X2}'s model did not read as a TMD; no icon");
             return;
         }
+        var s = Pose(verts, item < WeaponIds);
         s.Item = item;
         s.Ready = true;
         _slots[slot] = s;
-        if (probe) Console.WriteLine($"[KF2] shortcuts: icon {slot} item 0x{item:X2}, radius {s.Radius}");
+        if (probe) Console.WriteLine($"[KF2] shortcuts: icon {slot} item 0x{item:X2}, {verts.Length} vertices, fill {s.Fill:F3}");
     }
 
-    /// <summary>The model's first object's box, read off its vertices; false if the
-    /// bytes do not look like a model.</summary>
-    static bool Measure(IMemory m, uint tmd, out Slot s)
+    /// <summary>The first object's vertices, or null if the bytes do not look like a model.</summary>
+    static (int X, int Y, int Z)[]? Vertices(IMemory m, uint tmd)
     {
-        s = default;
         uint objects = m.ReadU32(tmd + 8);
-        if (objects == 0 || objects > 64) return false;
+        if (objects == 0 || objects > 64) return null;
         uint obj = tmd + TmdHeader;
-        uint verts = tmd + TmdHeader + m.ReadU32(obj);
+        uint at = tmd + TmdHeader + m.ReadU32(obj);
         uint count = m.ReadU32(obj + 4);
-        if (count == 0 || count > 4096 || verts + count * 8 > tmd + SlotBytes) return false;
-        int minX = int.MaxValue, minY = int.MaxValue, minZ = int.MaxValue;
-        int maxX = int.MinValue, maxY = int.MinValue, maxZ = int.MinValue;
+        if (count == 0 || count > MaxVertices || at < tmd || at + count * 8 > tmd + SlotBytes) return null;
+        var v = new (int, int, int)[count];
         for (uint i = 0; i < count; i++)
+            v[i] = ((short)m.ReadU16(at + i * 8), (short)m.ReadU16(at + i * 8 + 2), (short)m.ReadU16(at + i * 8 + 4));
+        return v;
+    }
+
+    // ---- the pose ----
+
+    static Slot Pose((int X, int Y, int Z)[] v, bool weapon)
+    {
+        // A weapon is turned so its long axis is the model's vertical first.
+        int[] upright = weapon ? LongAxisUp(v) : Identity();
+        int[] best = upright;
+        double bestArea = -1;
+        for (int yaw = 0; yaw < 0x1000; yaw += 0x80)
         {
-            short x = (short)m.ReadU16(verts + i * 8), y = (short)m.ReadU16(verts + i * 8 + 2), z = (short)m.ReadU16(verts + i * 8 + 4);
+            int[] stood = Mul(Ry(yaw), upright);
+            int[] t = weapon ? Mul(Rz(PointUpRight(v, stood)), stood) : Mul(Rx(Tip), stood);
+            // How much of it shows. A blade's box hardly changes with its thickness, so a
+            // weapon is judged by how far its vertices spread across the blade, which is
+            // widest with the flat to the eye; anything else by its box.
+            double area;
+            if (weapon) area = SpreadX(v, stood);
+            else
+            {
+                var (w, h, _, _) = Extent(v, t);
+                area = w * h;
+            }
+            if (area > bestArea + 1e-6) { bestArea = area; best = t; }
+        }
+        var (bw, bh, mx, my) = Extent(v, best);
+        double size = Math.Max(1, Math.Max(bw, bh));
+        return new Slot { Turn = best, Fill = 1.0 / size, MidX = mx / size, MidY = my / size };
+    }
+
+    /// <summary>Turns the model so its longest bounding-box axis is vertical.</summary>
+    static int[] LongAxisUp((int X, int Y, int Z)[] v)
+    {
+        int Span(Func<(int X, int Y, int Z), int> f) => v.Max(f) - v.Min(f);
+        int sx = Span(p => p.X), sy = Span(p => p.Y), sz = Span(p => p.Z);
+        if (sy >= sx && sy >= sz) return Identity();
+        return sx >= sz ? Rz(0x400) : Rx(0x400);
+    }
+
+    /// <summary>The roll that puts the vertical axis on the diagonal with the narrow end
+    /// (a blade's point; the hilt's guard is the wide end) up and right.</summary>
+    static int PointUpRight((int X, int Y, int Z)[] v, int[] t)
+    {
+        var p = v.Select(q => Apply(t, q)).ToArray();
+        double minY = p.Min(q => q.Y), maxY = p.Max(q => q.Y), band = (maxY - minY) * 0.2;
+        double Width(Func<double, bool> inBand)
+        {
+            var xs = p.Where(q => inBand(q.Y)).Select(q => q.X).ToArray();
+            return xs.Length == 0 ? 0 : xs.Max() - xs.Min();
+        }
+        double top = Width(y => y <= minY + band), bottom = Width(y => y >= maxY - band);
+        // Screen Y grows down, and Rz takes (0, -1) to (sin, -cos): with the narrow end at
+        // the top, +45 degrees leans it up and right; with it at the bottom, 180 + 45.
+        return top <= bottom ? Diagonal : 0x800 + Diagonal;
+    }
+
+    /// <summary>The variance of the vertices' X after <paramref name="t"/>: with the long
+    /// axis vertical, how wide the model looks across it.</summary>
+    static double SpreadX((int X, int Y, int Z)[] v, int[] t)
+    {
+        double sum = 0, sq = 0;
+        foreach (var q in v)
+        {
+            double x = Apply(t, q).X;
+            sum += x;
+            sq += x * x;
+        }
+        double mean = sum / v.Length;
+        return sq / v.Length - mean * mean;
+    }
+
+    static (double W, double H, double MidX, double MidY) Extent((int X, int Y, int Z)[] v, int[] t)
+    {
+        double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+        foreach (var q in v)
+        {
+            var (x, y, _) = Apply(t, q);
             minX = Math.Min(minX, x); maxX = Math.Max(maxX, x);
             minY = Math.Min(minY, y); maxY = Math.Max(maxY, y);
-            minZ = Math.Min(minZ, z); maxZ = Math.Max(maxZ, z);
         }
-        s.CentreX = (minX + maxX) / 2;
-        s.CentreY = (minY + maxY) / 2;
-        s.CentreZ = (minZ + maxZ) / 2;
-        int rx = (maxX - minX) / 2, ry = (maxY - minY) / 2, rz = (maxZ - minZ) / 2;
-        s.Radius = Math.Max(1, (int)Math.Sqrt((double)rx * rx + (double)ry * ry + (double)rz * rz));
-        return true;
+        return (maxX - minX, maxY - minY, (minX + maxX) / 2, (minY + maxY) / 2);
     }
+
+    static (double X, double Y, double Z) Apply(int[] t, (int X, int Y, int Z) q) =>
+        ((t[0] * q.X + t[1] * q.Y + t[2] * q.Z) / 4096.0,
+         (t[3] * q.X + t[4] * q.Y + t[5] * q.Z) / 4096.0,
+         (t[6] * q.X + t[7] * q.Y + t[8] * q.Z) / 4096.0);
+
+    static int[] Identity() => [0x1000, 0, 0, 0, 0x1000, 0, 0, 0, 0x1000];
+
+    static (int C, int S) CosSin(int a)
+    {
+        double r = a * Math.PI * 2 / 4096;
+        return ((int)Math.Round(Math.Cos(r) * 4096), (int)Math.Round(Math.Sin(r) * 4096));
+    }
+
+    static int[] Rx(int a) { var (c, s) = CosSin(a); return [0x1000, 0, 0, 0, c, -s, 0, s, c]; }
+    static int[] Ry(int a) { var (c, s) = CosSin(a); return [c, 0, s, 0, 0x1000, 0, -s, 0, c]; }
+    static int[] Rz(int a) { var (c, s) = CosSin(a); return [c, -s, 0, s, c, 0, 0, 0, 0x1000]; }
+
+    static int[] Mul(int[] a, int[] b)
+    {
+        var r = new int[9];
+        for (int i = 0; i < 3; i++)
+            for (int j = 0; j < 3; j++)
+                r[i * 3 + j] = (a[i * 3] * b[j] + a[i * 3 + 1] * b[3 + j] + a[i * 3 + 2] * b[6 + j]) >> 12;
+        return r;
+    }
+
+    // ---- drawing ----
 
     /// <summary>True if <paramref name="slot"/> has a model ready for <paramref name="item"/>.</summary>
     internal static bool Ready(int slot, byte item) => _slots[slot].Ready && _slots[slot].Item == item;
 
-    /// <summary>Draws slot <paramref name="slot"/>'s model turning about its middle at
-    /// (x, y), at most <paramref name="half"/> pixels from it, lit by light record
-    /// <paramref name="light"/> at depth <paramref name="z"/>, as the HUD's own models are.
+    /// <summary>Draws slot <paramref name="slot"/>'s model in its pose, filling a
+    /// <paramref name="size"/>-pixel square centred on (x, y), at depth <paramref name="z"/>.
     /// Inside the HUD builder's post-hook.</summary>
-    internal static void Draw(CpuContext c, IMemory m, int slot, int x, int y, int half, int light, int z)
+    internal static void Draw(CpuContext c, IMemory m, int slot, int x, int y, int size, int z)
     {
         var s = _slots[slot];
         if (!s.Ready) return;
+        double k = s.Fill * size;                            // model units to pixels
+        var draw = new int[9];
+        for (int i = 0; i < 9; i++) draw[i] = Math.Clamp((int)Math.Round(s.Turn[i] * k), short.MinValue, short.MaxValue);
+        var light = Mul(PreviewLight, s.Turn);
+        int tx = x - (int)Math.Round(s.MidX * size), ty = y - (int)Math.Round(s.MidY * size);
+
         uint tmd = Base(slot);
         uint savedModel = m.ReadU32(CurrentModel), savedVerts = m.ReadU32(VertexBase);
         var snap = c.Snapshot();
         try
         {
             c.SP = (c.SP - 0x200) & ~0xFu;
-            uint sp = c.SP + 0x40;
-            uint angles = sp, mat = sp + 0x10, lit = sp + 0x40, scale = sp + 0x70;
+            uint mat = c.SP + 0x40, lit = c.SP + 0x80, white = c.SP + 0xC0;
+            WriteMatrix(m, mat, draw, tx, ty, z);
+            WriteMatrix(m, lit, light, 0, 0, 0);
+            WriteMatrix(m, white, [0x1000, 0x1000, 0x1000, 0x1000, 0x1000, 0x1000, 0x1000, 0x1000, 0x1000], 0, 0, 0);
 
-            // A slow turn, the preview's (4 a frame at 60) on the clock, tipped toward the eye.
-            int turn = (int)(Environment.TickCount64 * 240 / 1000 & 0xFFF);
-            m.WriteU16(angles, 0x100);
-            m.WriteU16(angles + 2, (ushort)turn);
-            m.WriteU16(angles + 4, 0);
-            Call(c, m, KingsField2.RotMatrix, angles, mat);
-
-            uint rec = LightRecords + (uint)light * 0x68;
-            Call(c, m, KingsField2.func_8002DDDC, (uint)(short)m.ReadU16(rec + 0x66));
-            Call(c, m, KingsField2.SetBackColor_game, m.ReadU8(rec + 0x62), m.ReadU8(rec + 0x63), m.ReadU8(rec + 0x64));
-            Call(c, m, KingsField2.SetColorMatrix, rec + 0x50);
-            Call(c, m, KingsField2.MulMatrix0, rec, mat, lit);
+            Call(c, m, KingsField2.func_8002DDDC, PreviewFog);
+            Call(c, m, KingsField2.SetBackColor_game, Back, Back, Back);
+            Call(c, m, KingsField2.SetColorMatrix, white);
             Call(c, m, KingsField2.SetLightMatrix, lit);
-
-            int k = Math.Clamp(half * 0x1000 / s.Radius, 1, 0x7FFF);
-            m.WriteU32(scale, (uint)k);
-            m.WriteU32(scale + 4, (uint)k);
-            m.WriteU32(scale + 8, (uint)k);
-            Call(c, m, KingsField2.ScaleMatrix, mat, scale);
-
-            // Turn about the model's middle: the translation less where the matrix puts it.
-            var (ox, oy, oz) = Apply(m, mat, s.CentreX, s.CentreY, s.CentreZ);
-            m.WriteU32(mat + 0x14, (uint)(x - ox));
-            m.WriteU32(mat + 0x18, (uint)(y - oy));
-            m.WriteU32(mat + 0x1C, (uint)(z - oz));
             Call(c, m, KingsField2.SetRotMatrix, mat);
             Call(c, m, KingsField2.SetTransMatrix, mat);
 
             m.WriteU32(CurrentModel, tmd);
             Call(c, m, KingsField2.func_8002E1F0, 0);
-            uint count = m.ReadU32(tmd + TmdHeader + 4);
-            Call(c, m, KingsField2.func_8002E910, count);
+            Call(c, m, KingsField2.func_8002E910, m.ReadU32(tmd + TmdHeader + 4));
             Call(c, m, KingsField2.func_8002F214, 0, 0);
         }
         finally
@@ -175,13 +279,14 @@ static class HandsIcons
         }
     }
 
-    /// <summary>A MATRIX's 3x3 (s16, 4.12) times a vector.</summary>
-    static (int X, int Y, int Z) Apply(IMemory m, uint mat, int x, int y, int z)
+    /// <summary>A PSY-Q MATRIX: nine s16 (4.12), two bytes of pad, three s32 translations.</summary>
+    static void WriteMatrix(IMemory m, uint at, int[] r, int tx, int ty, int tz)
     {
-        int E(int r, int col) => (short)m.ReadU16(mat + (uint)(r * 6 + col * 2));
-        return ((E(0, 0) * x + E(0, 1) * y + E(0, 2) * z) >> 12,
-                (E(1, 0) * x + E(1, 1) * y + E(1, 2) * z) >> 12,
-                (E(2, 0) * x + E(2, 1) * y + E(2, 2) * z) >> 12);
+        for (uint i = 0; i < 9; i++) m.WriteU16(at + i * 2, (ushort)(short)r[i]);
+        m.WriteU16(at + 18, 0);
+        m.WriteU32(at + 0x14, (uint)tx);
+        m.WriteU32(at + 0x18, (uint)ty);
+        m.WriteU32(at + 0x1C, (uint)tz);
     }
 
     static uint Call(CpuContext c, IMemory m, Action<CpuContext, IMemory> f, uint a0 = 0, uint a1 = 0, uint a2 = 0, uint a3 = 0)
@@ -191,4 +296,7 @@ static class HandsIcons
         f(c, m);
         return c.V0;
     }
+
+    static uint Call(CpuContext c, IMemory m, Action<CpuContext, IMemory> f, int a0, int a1 = 0, int a2 = 0) =>
+        Call(c, m, f, (uint)a0, (uint)a1, (uint)a2);
 }
