@@ -41,7 +41,7 @@ static class HandsHud
 
     // The cross, in the game's pixels.
     const int CardWidth = 28, CardHeight = 42, Gap = 1;
-    const int BevelLess = 2;                                          // the panel's bevel, this much narrower a side
+    const int BevelLess = 3;                                          // the panel's bevel, this much narrower a side
     const int Drop = 14;                                              // the hotkey's card, below the hands'
 
     /// <summary>The icon slots of <see cref="HandsIcons"/>.</summary>
@@ -128,8 +128,7 @@ static class HandsHud
     static (int X, int Y, int W, int H) Inside(int x, int y)
     {
         var (bx, by) = CardFrame.Bevel;
-        int ix = (int)Math.Ceiling(bx), iy = (int)Math.Ceiling(by);
-        return (x + ix, y + iy, CardWidth - 2 * ix, CardHeight - 2 * iy);
+        return (x + bx, y + by, CardWidth - 2 * bx, CardHeight - 2 * by);
     }
 
     /// <summary>The model of <paramref name="item"/> as large as fits across the inside,
