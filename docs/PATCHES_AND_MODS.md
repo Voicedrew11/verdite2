@@ -4032,14 +4032,19 @@ swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
 - **The pad** (`PadLayout`). The physical pad's buttons are watched where the runtime
   polls them (0112's `HostWindow.PadButtons`, chained after the Japanese ○/× swap, and
   returned unchanged), and each new press of Square or a d-pad direction is counted.
+  A press is a real button's only: the runtime's default bindings put the left
+  stick's four directions on the d-pad's bits too (`Up = [11, 104]`, …), so pushing
+  the stick swapped weapons and cycled hotkeys (reported from play). A button held
+  only through a stick binding (RecompOne 0114's `HostWindow.PadStickButtons`) is not
+  counted; it still leaves the game's word with the rest of the taken bits.
   The game's pad word `0x80199554` is rewritten in player control's pre-hook
   (`func_8002957C`), which runs only in the world: the taken buttons' mask bits out,
   R1 as Square, L1 as Triangle. Stage 3 copies that word into `0x80199556` before its
   next read, so the edges stay the game's. Presses counted across a gap of more than
   250 ms between control ticks (a menu, a message, a scene) are dropped.
   `Analog.OneStick` is `Tank` unless the layout has the pad.
-- **The HUD** (`HandsHud`), after the HUD builder `func_80031D5C` while `u8 0x801994DD`
-  is 1: a Souls cross of three boxes at (6..94, 156..206), each the menu's nine window
+- **The HUD** (`HandsHud`), after the HUD builder `func_80031D5C` while the HP panel's
+  record (`0x80067774 + 0x24`, its `+0` byte) is drawn: a Souls cross of three boxes at (6..94, 156..206), each the menu's nine window
   templates (`0x80064C68`) drawn at 0.3 of their size, white and semi-transparent; the
   left the magic hand, the right the weapon hand, below them the current hotkey. Each
   hand's box has the slot out in its corner, small. Under the cross at y 208, the
@@ -4081,6 +4086,14 @@ swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
   `hands_slotN.txt`, one line `rightOut,rightAway,leftOut,leftAway,hotkey` (-1 none),
   for the rest, beside it. Written on a card save while on or anything is kept, read on
   every card load, cleared by a new game or a death without Seath's Tear.
+- **Hidden with the game's panel.** The gate was `u8 0x801994DD`, the options
+  screen's HUD toggle the records are copied from, and it stays 1 in a menu: before the
+  menu loop (and a shop or a talk) `func_80029C50` runs stage 13 once with the toggle
+  zeroed, which leaves the records hidden, and MenuWorld's passes draw from the records
+  without the copy. So the game's panel was gone behind a menu and the cross was not
+  (reported from play). Measured headless, slot 2 in fdat05, the menu opened with
+  `press Start`: the toggle read 1 on every frame; the record read hidden on all 61
+  menu frames a second and drawn on all 121 in play.
 - **Gone**: a pad button per shortcut and the d-pad takeover (`kf2.shortcuts.padN`,
   `kf2.shortcuts.dpad` are no longer read; the pad's layout is fixed).
 
@@ -4092,7 +4105,7 @@ in slot 2 and put weapon 1 away, and back again, the icon re-read each time;
 `shortcuts_slot2.txt`, `hands next` made hotkey 2 current (item 71, its model read,
 radius 183) and `hands use` used one (count 2 to 1). Windowed with the HUD drawing,
 `KF2_FPS=144 KF2_FPS_PROBE=1`: 144.0 fps drawn at 15.0 ticks/s, `KF2_PRESENT_PROBE` wide
-288. **Not tried**: a physical pad (R1, L1, Square, the d-pad, the bow held on R1, the
+288. **Not tried**: a physical pad (R1, L1, Square, the d-pad, the stick no longer swapping, the bow held on R1, the
 d-pad in menus), the assignment pickers on the weapon and magic pages, a card save
 writing `hands_slotN.txt`, a Japanese run. **Not judged** by the user yet: the boxes, the icons, the small letters.
 

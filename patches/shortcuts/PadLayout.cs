@@ -14,6 +14,10 @@ namespace Kf2.Shortcuts;
 ///
 /// Only the physical pad: its buttons are watched, unchanged, where the runtime polls
 /// them (<see cref="HostWindow.PadButtons"/>, chained after whatever was there), and
+/// a press is counted only from a real button: the default bindings put the left stick
+/// on the d-pad's bits too, and a button only a stick holds
+/// (<see cref="HostWindow.PadStickButtons"/>, RecompOne 0114) is not a press. Pushing
+/// the stick still clears those bits from the game's word, as Analog moves. And
 /// the game's pad word is rewritten in player control's pre-hook, which runs only in
 /// the world. So menus, the keyboard (Space still attacks, A and D still strafe), the
 /// mouse and every button the port presses itself keep their meaning.
@@ -52,6 +56,7 @@ static class PadLayout
 
     static Func<int, ushort, ushort>? _next;
     static volatile int _held;                       // port 0's buttons held, active high, Controller's layout
+    static int _buttonsHeld;                         // the same, less what only a stick holds; Observe's own
     static readonly int[] _pressed = new int[Presses.Length];
 
     /// <summary>The layout applies: Shortcuts is on and not stood down.</summary>
@@ -69,12 +74,14 @@ static class PadLayout
         if (_next != null) buttons = _next(port, buttons);
         if (port != 0) return buttons;
         int held = ~buttons & 0xFFFF;
-        int was = _held;
+        int pressed = held & ~HostWindow.PadStickButtons(port);
+        int was = _buttonsHeld;
         _held = held;
+        _buttonsHeld = pressed;
         for (int i = 0; i < Presses.Length; i++)
         {
             int bit = Presses[i].Bit;
-            if ((held & bit) != 0 && (was & bit) == 0) Interlocked.Increment(ref _pressed[i]);
+            if ((pressed & bit) != 0 && (was & bit) == 0) Interlocked.Increment(ref _pressed[i]);
         }
         return buttons;
     }

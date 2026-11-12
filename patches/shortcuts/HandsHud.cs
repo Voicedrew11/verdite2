@@ -14,8 +14,12 @@ namespace Kf2.Shortcuts;
 /// after a swap the name of what the hand took out.
 ///
 /// Drawn after the HUD builder (func_80031D5C, which stage 13 and MenuWorld's passes both
-/// call), only while the game draws its HUD (u8 0x801994DD), with the menu's text and
-/// window templates, on ordering-table slot 1 where the game's own 2D HUD sprites go.
+/// call), only when the builder drew the HP panel: record 1's drawn byte, not the options
+/// screen's toggle at 0x801994DD it is copied from. Before a menu, a shop or a talk the
+/// game draws one frame with the toggle zeroed (func_80029C50), which leaves the records
+/// hidden, and MenuWorld's passes draw from the records as they stand. Drawn with the
+/// menu's text and window templates, on ordering-table slot 1 where the game's own 2D
+/// HUD sprites go.
 /// Follows the HP panel to the screen's edge when the HUD is anchored there. Kept left of
 /// x 96 and above y 224, clear of the message strip at (96, 203).
 ///
@@ -23,7 +27,7 @@ namespace Kf2.Shortcuts;
 /// </summary>
 static class HandsHud
 {
-    const uint HudShown = 0x801994DD;                        // u8 1 while the HP panel draws
+    const uint PanelDrawn = Stage13.HudRecords + Stage13.HudStride;   // record 1's +0: u8 1 while the HP panel draws
     const uint Descriptor = MenuDraw.ActiveDescriptor;
     const uint TextTemplate = MenuDraw.TextTemplate, NumberTemplate = MenuDraw.NumberTemplate;
     const uint WindowTemplates = MenuDraw.WindowTemplates;
@@ -57,7 +61,7 @@ static class HandsHud
 
     internal static void Draw(CpuContext c, IMemory m)
     {
-        if (m.ReadU8(HudShown) != 1) return;
+        if (m.ReadU8(PanelDrawn) != 1) return;
         uint d = m.ReadU32(Descriptor);
         uint at = m.ReadU32(d + 8), end = m.ReadU32(d + 4);
         if (at == 0 || end <= at || end - at < MaxQuads * MenuDraw.QuadBytes * 2) return;   // room for ours and the models'
