@@ -1642,6 +1642,15 @@ Four files in the directory have no entry below:
   `UploadStatic` and draws through `WorldVs`) had drawn it; `UploadStatic` now gives
   them zeros as long as the map until then. Static reasoning from the trace; not
   reproduced on NVIDIA here. Not in the patch file.
+  Amended again (2026-11-12): fog at the corners (`MainFogFromZ` off) on a face the GPU
+  cuts at the near plane. `WorldVs` puts a corner's `vFog` from `H/max(z, 1)`, which
+  behind the eye is the cue's saturated end, and the clip interpolates it into the
+  face's visible part: a wall beside the camera fogged to black over up to 79% of the
+  picture. `WorldVs` now writes `vClipped` (1 for a corner nearer than `uNear`, `PrimVs`
+  0), `uCueFromZ` is the view's H in every mode, and `uCueAtCorners` keeps `PrimFs`'s
+  `fogRaw` on `vFog` unless `vClipped` is above 0, so only a cut face is fogged at the
+  pixel's depth; a face wholly in front is the game's corner fog as before. Not in the
+  patch file.
 
 - `0086-retained-model-mask.patch` — the retained models (`0085`) are drawn at slot 1,
   ahead of every packet the walk sends after them, and `0051`'s tolerance (1 unit

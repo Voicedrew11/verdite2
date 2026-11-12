@@ -1625,6 +1625,9 @@ internal static class GlShaders
         noperspective out float vFog;
         // 0085. The corner's DQA and DQB, for PrimFs to fog at the pixel's own depth.
         out vec2 vCue;
+        // 0085, amended. Above 0 on a face the GPU cuts at the near plane: a corner of
+        // it is behind the eye, where the screen-affine vFog means nothing.
+        out float vClipped;
         flat out uint vLight;
         flat out uvec2 vTex;
         flat out uint vMat;
@@ -1860,6 +1863,7 @@ internal static class GlShaders
                 gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
             gl_Position = modelPlace(gl_Position, v);
             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
+            vClipped = z < uNear ? 1.0 : 0.0;
 
             bool dots = (flags & 0x40000000u) != 0u;
             vec3 lit = color;
@@ -1960,6 +1964,8 @@ internal static class GlShaders
         noperspective out vec3 vLit;
         noperspective out float vFog;
         out vec2 vCue;
+        // The world program's; a packet is never cut by the GPU.
+        out float vClipped;
         flat out uint vLight;
         flat out uvec2 vTex;
         flat out uint vMat;
@@ -1999,6 +2005,7 @@ internal static class GlShaders
             vLit = inLit;
             vFog = inFog;
             vCue = vec2(0.0);
+            vClipped = 0.0;
             vLight = inLight;
             vTex = inTex;
             vMat = inMat;
@@ -2045,6 +2052,12 @@ internal static class GlShaders
         // eye, and a floor clipped at the camera's feet fogged to black.
         in vec2 vCue;
         uniform float uCueFromZ;
+        // 0085, amended. Fog at the corners (the game's): vFog, except on a face the
+        // GPU cut at the near plane (vClipped above 0), which is fogged at the
+        // pixel's depth as the other two modes fog every face. A wall beside the
+        // camera fogged to black from its corner behind the eye.
+        in float vClipped;
+        uniform int uCueAtCorners;
         flat in uint vLight;
         flat in uvec2 vTex;
         flat in uint vMat;
@@ -2491,7 +2504,7 @@ internal static class GlShaders
         float fogRaw() {
             gFogAtDepth = false;
             if (((vLight >> 24) & 7u) == 5u) return linearDepthCue(fogDepth() * 65536.0, vCue);
-            if (uCueFromZ <= 0.0 || vDepth <= 0.0) return vFog;
+            if (uCueFromZ <= 0.0 || vDepth <= 0.0 || (uCueAtCorners != 0 && vClipped <= 0.0)) return vFog;
             gFogAtDepth = uRadialFog != 0;
             float q = min(uCueFromZ / max(fogDepth(), 1.0 / 65536.0), 131071.0);
             return (vCue.x * q + vCue.y) / 4096.0;
