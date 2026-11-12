@@ -4073,7 +4073,14 @@ swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
   rounded up, since the transform drops the fraction (the bottom fell at 227). The
   first version drew the menu's nine window pieces at 0.3 of their 33-texel size, which
   matched nothing and would shimmer at 240p, with a name line under the cross.
-  **Not judged by eye.**
+  **The bevel is a pixel a side narrower than the panel's** (asked for after the first
+  look: the inside 2 pixels larger each way), 4.56 x 5.27; the opening measured
+  19 x 31 against 17 x 29, the outer edges unmoved. **Not lit per pixel**: per-pixel
+  lighting and the packet depth leave the HUD alone through `PolyAssembler.InHud`, which
+  `PerPixelLighting` raises only inside the builder, so the cross (drawn in a post-hook,
+  after that flag's post had lowered it) was lit per pixel, cards and models both
+  (reported from play). `HandsHud.Draw` holds the flag itself for its draw and puts back
+  what it found. **Not judged by eye.**
 - **The icons are the items' own models** (`HandsIcons`). The game has no 2D icons; its
   HUD is small models drawn without perspective, and so are these: the orthographic
   `func_8002E910` and the lit `func_8002F214`, with the current model pointed for the

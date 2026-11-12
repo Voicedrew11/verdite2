@@ -12,7 +12,8 @@ namespace Kf2.Shortcuts;
 /// that is out in its top right corner, an item hotkey its count in the bottom right.
 ///
 /// Laid out in the game's pixels to work at 240p: the cards are 28 x 42, a pixel apart,
-/// as wide together as the HP panel; their digits and numerals are the menu's fonts at
+/// as wide together as the HP panel, their bevel a pixel a side narrower than the
+/// panel's for room inside; their digits and numerals are the menu's fonts at
 /// their own size. The margins are the panel's: its left edge, and its distance from the
 /// top as the distance from the bottom. They follow the panel to the screen's edge when
 /// the HUD is anchored (<see cref="Widescreen.AnchoredHudX"/>).
@@ -40,6 +41,7 @@ static class HandsHud
 
     // The cross, in the game's pixels.
     const int CardWidth = 28, CardHeight = 42, Gap = 1;
+    const int BevelLess = 1;                                          // the panel's bevel, this much narrower a side
     const int Drop = 14;                                              // the hotkey's card, below the hands'
 
     /// <summary>The icon slots of <see cref="HandsIcons"/>.</summary>
@@ -55,9 +57,21 @@ static class HandsHud
         HandsIcons.Want(c, m, HotkeyIcon, spell != Shortcuts.None ? SpellCrystals.Crystal(spell) : item, probe);
     }
 
+    /// <summary>The cross, in the HUD builder's post-hook. Drawn as the HUD is drawn:
+    /// with <see cref="PolyAssembler.InHud"/> held, which per-pixel lighting and the
+    /// packet depth raise only inside the builder, so the lit assembler leaves the
+    /// cards and models their own colours and no depth, whichever order the posts run in.</summary>
     internal static void Draw(CpuContext c, IMemory m)
     {
         if (m.ReadU8(PanelDrawn) != 1) return;
+        bool wasInHud = PolyAssembler.InHud;
+        PolyAssembler.InHud = true;
+        try { DrawCross(c, m); }
+        finally { PolyAssembler.InHud = wasInHud; }
+    }
+
+    static void DrawCross(CpuContext c, IMemory m)
+    {
         uint d = m.ReadU32(Descriptor);
         if (!HasRoom(m, d)) return;
 
@@ -107,10 +121,10 @@ static class HandsHud
     static void Frame(CpuContext c, IMemory m, uint d, int x, int y)
     {
         if (!HasRoom(m, d)) return;
-        CardFrame.Draw(c, m, x, y, CardWidth, CardHeight);
+        CardFrame.Draw(c, m, x, y, CardWidth, CardHeight, BevelLess);
     }
 
-    /// <summary>The inside of a card at (x, y): the frame less the panel's bevel.</summary>
+    /// <summary>The inside of a card at (x, y): the frame less its bevel.</summary>
     static (int X, int Y, int W, int H) Inside(int x, int y)
     {
         var (bx, by) = CardFrame.Bevel;

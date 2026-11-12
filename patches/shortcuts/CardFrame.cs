@@ -10,7 +10,7 @@ namespace Kf2.Shortcuts;
 /// record, scale and depth, through the same calls the HUD builder func_80031D5C makes
 /// for it. The model's own vertices are moved, not scaled: anything within the bevel of
 /// an edge keeps its distance from that edge, the rest is spread across, so a card has
-/// the panel's bevel to the pixel at any size.
+/// the panel's bevel to the pixel at any size, or one narrower by whole pixels.
 ///
 /// The moved vertices go on the stack, and the vertex base func_8002E910 reads is
 /// pointed at them after func_8002E1F0 sets it; the model in the bank is never written.
@@ -29,14 +29,15 @@ static class CardFrame
 
     static uint Record => Stage13.HudRecords + PanelRecord * Stage13.HudStride;
 
-    /// <summary>The panel's bevel in pixels, across and down, at the record's scale;
-    /// (0, 0) until the model has been read once.</summary>
+    /// <summary>The bevel last drawn in pixels, across and down; (0, 0) until a frame
+    /// has been drawn.</summary>
     internal static (double X, double Y) Bevel { get; private set; }
 
     /// <summary>The frame filling <paramref name="w"/> x <paramref name="h"/> pixels with
     /// its top left at (<paramref name="x"/>, <paramref name="y"/>), in the coordinates the
-    /// HUD's packets are drawn in.</summary>
-    internal static void Draw(CpuContext c, IMemory m, int x, int y, int w, int h)
+    /// HUD's packets are drawn in, its bevel <paramref name="bevelLess"/> pixels a side
+    /// narrower than the panel's.</summary>
+    internal static void Draw(CpuContext c, IMemory m, int x, int y, int w, int h, int bevelLess)
     {
         uint rec = Record;
         int sx = (short)m.ReadU16(rec + 0x8), sy = (short)m.ReadU16(rec + 0xA), sz = (short)m.ReadU16(rec + 0xC);
@@ -54,7 +55,7 @@ static class CardFrame
             uint obj = Call(c, m, KingsField2.func_8002E1BC, 0);
             uint count = m.ReadU32(obj + 4);
             if (count == 0 || count > MaxVertices) return;
-            if (!Place(m, obj + m.ReadU32(obj), count, verts, Units(w, sx), Units(h, sy), sx, sy)) return;
+            if (!Place(m, obj + m.ReadU32(obj), count, verts, Units(w, sx), Units(h, sy), bevelLess * 4096 / sx, bevelLess * 4096 / sy, sx, sy)) return;
 
             WriteMatrix(m, matrix, sx, sy, sz, x, y, (short)m.ReadU16(rec + 0x14));
             Call(c, m, KingsField2.func_8002DDDC, (uint)(short)m.ReadU16(light + 0x66));
@@ -79,8 +80,9 @@ static class CardFrame
 
     /// <summary>Writes the model's vertices moved to a frame <paramref name="wide"/> x
     /// <paramref name="tall"/> units, into <paramref name="dst"/>. False if the model is
-    /// not the frame shape (corners at 0, a bevel inside).</summary>
-    static bool Place(IMemory m, uint src, uint count, uint dst, int wide, int tall, int sx, int sy)
+    /// not the frame shape (corners at 0, a bevel inside). The bevel is narrowed by
+    /// <paramref name="lessX"/> and <paramref name="lessY"/> units.</summary>
+    static bool Place(IMemory m, uint src, uint count, uint dst, int wide, int tall, int lessX, int lessY, int sx, int sy)
     {
         int fullX = 0, fullY = 0, bevelX = int.MaxValue, bevelY = int.MaxValue;
         for (uint i = 0; i < count; i++)
@@ -94,13 +96,14 @@ static class CardFrame
         }
         if (fullX == 0 || fullY == 0 || 2 * bevelX >= fullX || 2 * bevelY >= fullY) return false;
         if (wide < 2 * bevelX || tall < 2 * bevelY) return false;
-        Bevel = (bevelX * sx / 4096.0, bevelY * sy / 4096.0);
+        int toX = Math.Max(1, bevelX - lessX), toY = Math.Max(1, bevelY - lessY);
+        Bevel = (toX * sx / 4096.0, toY * sy / 4096.0);
 
         for (uint i = 0; i < count; i++)
         {
             uint s = src + i * 8, d = dst + i * 8;
-            m.WriteU16(d, (ushort)Move((short)m.ReadU16(s), fullX, bevelX, wide));
-            m.WriteU16(d + 2, (ushort)Move((short)m.ReadU16(s + 2), fullY, bevelY, tall));
+            m.WriteU16(d, (ushort)Move((short)m.ReadU16(s), fullX, bevelX, toX, wide));
+            m.WriteU16(d + 2, (ushort)Move((short)m.ReadU16(s + 2), fullY, bevelY, toY, tall));
             m.WriteU16(d + 4, m.ReadU16(s + 4));
             m.WriteU16(d + 6, m.ReadU16(s + 6));
         }
@@ -112,12 +115,13 @@ static class CardFrame
     /// pixel short.</summary>
     static int Units(int pixels, int scale) => (pixels * 4096 + scale - 1) / scale;
 
-    /// <summary>One coordinate of a frame <paramref name="full"/> long, moved to one
-    /// <paramref name="target"/> long with its bevel kept.</summary>
-    static int Move(int v, int full, int bevel, int target)
+    /// <summary>One coordinate of a frame <paramref name="full"/> long with a bevel
+    /// <paramref name="bevel"/> deep, moved to one <paramref name="target"/> long with a
+    /// bevel <paramref name="to"/> deep.</summary>
+    static int Move(int v, int full, int bevel, int to, int target)
     {
-        if (v <= bevel) return v;
-        if (v >= full - bevel) return v - full + target;
+        if (v <= bevel) return v * to / bevel;
+        if (v >= full - bevel) return target - (full - v) * to / bevel;
         return v * target / full;
     }
 
