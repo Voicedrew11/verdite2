@@ -4044,15 +4044,36 @@ swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
   250 ms between control ticks (a menu, a message, a scene) are dropped.
   `Analog.OneStick` is `Tank` unless the layout has the pad.
 - **The HUD** (`HandsHud`), after the HUD builder `func_80031D5C` while the HP panel's
-  record (`0x80067774 + 0x24`, its `+0` byte) is drawn: a Souls cross of three boxes at (6..94, 156..206), each the menu's nine window
-  templates (`0x80064C68`) drawn at 0.3 of their size, white and semi-transparent; the
-  left the magic hand, the right the weapon hand, below them the current hotkey. Each
-  hand's box has the slot out in its corner, small. Under the cross at y 208, the
-  hotkey's name and count, or for 2 s after a swap the name of what the hand took out.
-  Kept left of x 96 and so clear of the message strip at (96, 203); follows the HP
-  panel to the screen's edge when the HUD is anchored. All on ordering-table slot 1
-  (where the game's 2D HUD sprites go), text linked before the boxes so it draws over
-  them; `MenuDraw.Quad` is the new any-size quad.
+  record (`0x80067774 + 0x24`, its `+0` byte) is drawn: a Souls cross of three cards,
+  the left the magic hand, the right the weapon hand, the middle one 14 pixels lower
+  the current hotkey. **Laid out to work at 240p**, so nothing in it is scaled below
+  the game's own pixels: the cards are 28 x 42, a pixel apart, 86 wide together as the
+  HP panel is; a hand's card has the slot out in its top right corner, an item hotkey
+  its count in the bottom right, a spell its numeral in the bottom left, each in the
+  menu's fonts at their own size (digits 7 x 14, capitals 8 x 15, an I advanced 4). No
+  names: the model and the number say it. **The margins are the panel's**: its left
+  edge (record 13's X, native 5, moved out by `Widescreen.AnchoredHudX` when the HUD is
+  anchored; `Widescreen.NativeHudX` reads the native X inside the builder's hooks in
+  either order), and its distance from the top (Y 12) as the distance from the bottom,
+  so the cross spans y 172..228. Measured from the packets: the frames at x -49..-21,
+  -20..8 and 9..36 anchored at a 54 margin (the panel's own at -49), y 172..214 and
+  186..228. Kept left of native x 96 and so clear of the message strip at (96, 203).
+- **The cards are the HP panel's frame** (`CardFrame`). The panel is HUD record 13:
+  model 16, a 2000 x 1000 frame whose 128-unit bevel is sunk 512 deep (eight lit,
+  textured quads round two translucent ones), light record `0x48`, scale
+  (178, 200, 2)/4096, Z 40; a 1:1 orthographic transform, so 87 x 49 pixels with a
+  5.56 x 6.25 bevel, matching the panel measured off a screenshot (x 5, y 12, 4.6875
+  window pixels to a game pixel). Each card is drawn through the builder's own calls
+  (`func_80034834` the model, `func_8002E1BC`, the record's light record into
+  `func_8002DDDC`, `SetBackColor`, `SetColorMatrix`, `SetLightMatrix`, the scale as the
+  rotation, `func_8002E1F0`, `func_8002E910`, `func_8002F214`), with the vertex base
+  pointed at a moved copy of the model's vertices on the stack: within the bevel of an
+  edge a vertex keeps its distance from it, the rest is spread across, so the bevel is
+  the panel's at any size. The model in the bank is never written. The model units are
+  rounded up, since the transform drops the fraction (the bottom fell at 227). The
+  first version drew the menu's nine window pieces at 0.3 of their 33-texel size, which
+  matched nothing and would shimmer at 240p, with a name line under the cross.
+  **Not judged by eye.**
 - **The icons are the items' own models** (`HandsIcons`). The game has no 2D icons; its
   HUD is small models drawn without perspective, and so are these: the orthographic
   `func_8002E910` and the lit `func_8002F214`, with the current model pointed for the
@@ -4068,8 +4089,8 @@ swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
   blade's thickness, and picked the edge), and laid on the diagonal with its narrow end
   (the point; the guard is the wide end) up and right; anything else is turned to show
   the largest box and tipped 22 degrees toward the eye. The matrix is built in C#, so
-  the box it is measured in is the box it is drawn in: the projected corners fill 24 of
-  the box's 30 pixels, centred. (The first version spun each model and scaled it by its
+  the box it is measured in is the box it is drawn in: the projected corners fill the
+  card's inside (16 pixels: the card less the bevel), centred. (The first version spun each model and scaled it by its
   3D radius, which left a dagger a sliver.)
 - **A spell is its crystal and a level** (`SpellCrystals`): the item model of its
   element's crystal (FIRE, WATER, EARTH, WIND, LIGHT, DARK CRYSTAL, items 90-95) with a

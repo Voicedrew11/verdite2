@@ -618,11 +618,26 @@ public static class Widescreen
             if (m.ReadU8(rec) == 0xFF) break;
             short x = (short)m.ReadU16(rec + HudX);
             _hudX[i] = x;
-            m.WriteU16(rec + HudX, (ushort)(x + (x < ScreenCentre ? -margin : margin)));
+            m.WriteU16(rec + HudX, (ushort)AnchoredHudX(x));
             _hudMoved = (int)i + 1;
         }
         _hudMovedRecords += _hudMoved;
     }
+
+    /// <summary>Where the builder draws a HUD record the game placed at X
+    /// <paramref name="x"/>: out by the margin toward its edge when the HUD is anchored.
+    /// For anything drawn beside the HUD, so it keeps the HUD's margins.</summary>
+    public static int AnchoredHudX(int x)
+    {
+        int margin = Margin;
+        if (!(AnchorHud && On) || margin <= 0) return x;
+        return x + (x < ScreenCentre ? -margin : margin);
+    }
+
+    /// <summary>Record <paramref name="i"/>'s X as the game placed it, also while the
+    /// builder has it moved (inside its pre and post, whichever order hooks run in).</summary>
+    public static int NativeHudX(IMemory m, int i) =>
+        i < _hudMoved ? _hudX[i] : (short)m.ReadU16(Stage13.HudRecords + (uint)i * Stage13.HudStride + HudX);
 
     /// <summary>Put every record's X back the moment the builder has drawn it.</summary>
     public static void AfterHud(CpuContext c, IMemory m)

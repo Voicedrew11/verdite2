@@ -43,10 +43,6 @@ static class Hands
     /// <summary>A weapon swap asked for while a swing was running; done once it ends.</summary>
     static bool _weaponPending;
 
-    /// <summary>The frame a swap last happened, for the HUD's name.</summary>
-    internal static long SwappedAt { get; private set; } = -1;
-    internal static bool SwappedWeapon { get; private set; }
-
     internal static Hand Right { get { lock (Shortcuts.Sync) return _right; } }
     internal static Hand Left { get { lock (Shortcuts.Sync) return _left; } }
 
@@ -61,7 +57,6 @@ static class Hands
             _left = new Hand { Out = 0, Away = Shortcuts.None };
         }
         _weaponPending = false;
-        SwappedAt = -1;
     }
 
     internal static void Restore(Hand right, Hand left)
@@ -128,7 +123,6 @@ static class Hands
             _right.Away = was;
             _right.Out = 1 - _right.Out;
         }
-        Swapped(true);
         if (probe) Console.WriteLine($"[KF2] shortcuts: weapon 0x{was:X2} -> 0x{away:X2}, slot {_right.Out + 1} out");
     }
 
@@ -145,14 +139,7 @@ static class Hands
             _left.Out = 1 - _left.Out;
         }
         m.WriteU8(AttackSpell, away);
-        Swapped(false);
         if (probe) Console.WriteLine($"[KF2] shortcuts: spell 0x{was:X2} -> 0x{away:X2}, slot {_left.Out + 1} out");
-    }
-
-    static void Swapped(bool weapon)
-    {
-        SwappedAt = Environment.TickCount64;
-        SwappedWeapon = weapon;
     }
 
     /// <summary>func_80026210(id): the weapon byte, its record, its model in the arm and
