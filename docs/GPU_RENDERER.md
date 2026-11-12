@@ -1971,11 +1971,48 @@ a patch of 9 changed cells is 7.4-9.8 ms: faces 0.5-1.0, weld 1.1-1.7, `SetStati
 load are unchanged. `KF2_FPS=144 KF2_FPS_PROBE=1`: 140-144 fps drawn at 14.9-15.0
 ticks/s, as before the change.
 
-**What is left of the cost.** `SetStatic` still sorts and the backend still uploads the
-whole map (`UploadStatic`, the mip keys, the water's centres) on the next frame. The
-first profile showed the frame after a build's `DrawOTag` at 8-10 ms. Patching
-`RetainedScene`'s static buffer by chunk would remove both. That is a RecompOne change,
-in a commit of its own.
+**What is left of the cost.** `SetStatic` still sorted and the backend still uploaded
+the whole map on the next frame. The next section patches both by chunk.
+
+**Mechanism measured; a real door in play not watched, and the hitch's absence not
+yet confirmed by the player.**
+
+## The scene is patched by chunk too (2026-11-11)
+
+**A patch now reaches the GPU as the chunks it changed** (RecompOne `0113`).
+`RetainedScene` lays the static map out with spare room after each (range, chunk)
+slot, filled with degenerate triangles. `RetainedMap.Patch` marks the chunks its
+region's cells lie in (a triangle's chunk is its centre's) and publishes through
+`RetainedScene.PatchStatic`, which rewrites those chunks, and any whose count moved,
+in place. It falls back to a whole layout when a slot outgrows its room. The backend
+sends only the rewritten ranges; the texture keys are refreshed over them; the water's
+centres and the shadows' cubemaps follow any change.
+
+The probe's build line says `scene by chunk` or `scene whole`, and
+`KF2_GPUWORLD_MAPCHECK=1` now also lays the patched map out whole and compares every
+slot and chunk (`scene's chunks match`). Two readers of the whole span read slot by
+slot now, since a range's span holds the padding: `gpuworld at` and the retained
+probe's triangle count.
+
+**Measured** (area 1 from slot 2, nine drawn halves flipped near the player every
+2 s by a temporary switch, not committed):
+
+| | whole | patch |
+|---|---|---|
+| map build (game thread) | 64-74 ms | 4.7-8.2 ms |
+| of which the scene (`SetStatic`/`PatchStatic`) | 7-10 ms | 1.1-1.7 ms |
+| upload on the next frame (`UploadStatic`) | 3.6-5.1 ms | 0.01-0.14 ms |
+| texture keys on the next frame | 3.0-4.8 ms | 0.9-1.6 ms |
+
+Every patch matched a whole build and a whole layout. The picture hash (`snap hash`,
+paused, at three `goto` spots) is identical to the build before this change.
+`KF2_GLDEBUG=1 KF2_FPS=144 KF2_FPS_PROBE=1`, roaming: 144.0 fps drawn at 14.9-15.0
+ticks/s, no GL error, `[present] wide 288`.
+
+**What is left:** about 2-3 ms of a patch is not in its three parts. That is the hash,
+the splice's copy of the whole corner array and the key pass, all over the whole map.
+A door also redraws the authored lights' shadow cubemaps, as any change to the map
+did before.
 
 **Mechanism measured; a real door in play not watched, and the hitch's absence not
 yet confirmed by the player.**

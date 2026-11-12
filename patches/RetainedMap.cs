@@ -171,7 +171,7 @@ public static class RetainedMap
             _lastWhy = _why;
             if (GpuWorld.Probing)
                 Console.WriteLine($"[KF2] mapprobe: build {_builds}, {_buildMs:F2} ms " +
-                                  $"({(patched ? $"patched {_patchedCells} changed cell(s)" : "whole")}: faces {_emitMs:F1}, " +
+                                  $"({(patched ? $"patched {_patchedCells} changed cell(s), scene {(_scenePatched ? "by chunk" : "whole")}" : "whole")}: faces {_emitMs:F1}, " +
                                   $"weld {_seamsMs:F1}, scene {_publishMs:F1}), {_n / 3} triangle(s), for " +
                                   $"{(_why.Length > 0 ? _why : "the load's reset ")}" +
                                   $"{Interrupts.ClockMs - _loadAt:F0} ms after {_loadName}");
@@ -361,6 +361,9 @@ public static class RetainedMap
     static (int X, int Y, int Z)[] _rawSpare = new (int, int, int)[1 << 16];
     static readonly bool[] _changed = new bool[80 * 80], _inner = new bool[80 * 80], _region = new bool[80 * 80];
     static int _patchedCells;
+    static readonly bool[] _chunks = new bool[RetainedScene.Chunks];
+    /// <summary>Whether the last publish rewrote only some of the scene's chunks.</summary>
+    static bool _scenePatched;
     static double _emitMs, _publishMs;
     static long _patches;
 
@@ -425,7 +428,13 @@ public static class RetainedMap
         if (Weld) { Slide(keptN, _n); CloseSeams(keptN, _n); }
         _seamsMs = System.Diagnostics.Stopwatch.GetElapsedTime(seamsAt).TotalMilliseconds;
         Splice(keptN, keptNotes);
-        Publish();
+        // The scene's chunks the region's cells lie in: a triangle's chunk is its
+        // centre's, and a region cell's triangles reach no further than the next cell.
+        Array.Clear(_chunks);
+        for (int cell = 0; cell < 80 * 80; cell++)
+            if (_region[cell])
+                _chunks[cell / 80 / RetainedScene.ChunkTiles * RetainedScene.ChunkSide + cell % 80 / RetainedScene.ChunkTiles] = true;
+        Publish(_chunks);
         KeepKeys(mem);
         _patchedCells = cells;
         _patches++;
@@ -537,11 +546,13 @@ public static class RetainedMap
             { _tris[i].X = at.X; _tris[i].Z = at.Z; }
     }
 
-    /// <summary>The corners to the scene and the plane notes to the planes.</summary>
-    static void Publish()
+    /// <summary>The corners to the scene, only the marked chunks rewritten when it can
+    /// (<see cref="RetainedScene.PatchStatic"/>), and the plane notes to the planes.</summary>
+    static void Publish(bool[]? chunks = null)
     {
         var at = System.Diagnostics.Stopwatch.GetTimestamp();
-        RetainedScene.SetStatic(_tris.AsSpan(0, _n));
+        _scenePatched = chunks != null && RetainedScene.PatchStatic(_tris.AsSpan(0, _n), chunks);
+        if (!_scenePatched) RetainedScene.SetStatic(_tris.AsSpan(0, _n));
         RetainedPlanes.Clear();
         Span<float> px = stackalloc float[4], py = stackalloc float[4], pz = stackalloc float[4];
         for (int i = 0; i < _noteN; i++)
@@ -576,6 +587,8 @@ public static class RetainedMap
         var tris = _tris.AsSpan(0, _n).ToArray();
         var starts = (int[])_halfStart.Clone();
         int notes = _noteN;
+        bool scenePatched = _scenePatched;
+        string? scene = scenePatched ? RetainedScene.VerifyStatic(tris) : null;
         Build(c, mem);
         int bad = 0, badHalves = 0;
         var where = new System.Text.StringBuilder();
@@ -592,7 +605,8 @@ public static class RetainedMap
         }
         Console.WriteLine($"[KF2] mapcheck: patch {(badHalves == 0 ? "matches" : "DIFFERS from")} the whole build " +
                           $"({tris.Length} corner(s), {_n} whole; {notes} plane note(s), {_noteN} whole)" +
-                          (badHalves > 0 ? $"; {badHalves} half(s) differ:{where}" : ""));
+                          (badHalves > 0 ? $"; {badHalves} half(s) differ:{where}" : "") +
+                          (!scenePatched ? "; scene laid out whole" : scene == null ? "; scene's chunks match" : $"; scene DIFFERS: {scene}"));
     }
 
     // KF2_GPUWORLD_DUMPMAP=dir: each build's triangles as x,y,z,flags per corner (CSV), for offline seam work.
@@ -1222,7 +1236,8 @@ public static class RetainedMap
         double now = Environment.TickCount64 / 1000.0;
         if (now < _reportedAt) return;
         _reportedAt = now + 2.0;
-        int tris = RetainedScene.Static.Length / 3;
+        int tris = (RetainedScene.StaticCount[0] + RetainedScene.StaticCount[1] + RetainedScene.StaticCount[2]
+                    + RetainedScene.StaticCount[3] + RetainedScene.StaticCount[4]) / 3;
         Console.WriteLine($"[KF2] retained: {tris} static triangle(s) from {_faces} face(s) of {_halves} half/halves " +
                           $"({_skippedModels} refused as not a mesh), {_builds} build(s), last {_buildMs:F2} ms for {_lastWhy}; " +
                           $"ranges opaque {RetainedScene.StaticCount[0] / 3}, semi {RetainedScene.StaticCount[1] / 3}/" +

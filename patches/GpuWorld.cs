@@ -451,9 +451,11 @@ public static class GpuWorld
         var st = RetainedScene.Static;
         var hits = new List<string>();
         Span<float> sx = stackalloc float[3], sy = stackalloc float[3], sz = stackalloc float[3];
-        for (int r = 0; r < 5; r++)
-            for (int i = RetainedScene.StaticStart[r]; i + 2 < RetainedScene.StaticStart[r] + RetainedScene.StaticCount[r]; i += 3)
+        // Slot by slot: a range's span holds the spare room's degenerate triangles too.
+        for (int slot = 0; slot < 5 * RetainedScene.Chunks; slot++)
+            for (int i = RetainedScene.ChunkStart[slot]; i + 2 < RetainedScene.ChunkStart[slot] + RetainedScene.ChunkCount[slot]; i += 3)
             {
+                int r = slot / RetainedScene.Chunks;
                 bool ok = true;
                 for (int k = 0; k < 3 && ok; k++)
                 {

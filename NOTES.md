@@ -488,6 +488,7 @@ The plan to draw the world from meshes kept on the GPU (retained-mode rendering)
 - Rules this keeps
 - A rebuild for a half that draws nothing
 - Only the cells near a change are rebuilt
+- The scene is patched by chunk too
 
 ### [JAPANESE.md](docs/JAPANESE.md)
 
