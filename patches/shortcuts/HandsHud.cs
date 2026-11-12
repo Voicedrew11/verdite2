@@ -131,13 +131,13 @@ static class HandsHud
         return (x + bx, y + by, CardWidth - 2 * bx, CardHeight - 2 * by);
     }
 
-    /// <summary>The model of <paramref name="item"/> as large as fits across the inside,
-    /// centred; nothing until the model has been read.</summary>
+    /// <summary>The model of <paramref name="item"/> posed large in the inside and cropped
+    /// by it; nothing until the model has been read.</summary>
     static void Icon(CpuContext c, IMemory m, uint d, int slot, byte item, int x, int y, int z)
     {
         if (!HandsIcons.Ready(slot, item) || !HasRoom(m, d)) return;
         var (ix, iy, iw, ih) = Inside(x, y);
-        HandsIcons.Draw(c, m, slot, ix + iw / 2, iy + ih / 2, Math.Min(iw, ih), z);
+        HandsIcons.Draw(c, m, slot, ix, iy, iw, ih, z);
     }
 
     /// <summary>A count, right-aligned in the inside's bottom right corner.</summary>

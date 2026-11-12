@@ -4098,15 +4098,32 @@ swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
   preview's own routines (`func_80017F1C(6, id, 0)` its size, `func_800183A0(6, id, dst)`,
   then the fix-up `func_8002E314`) into a slot of `PrimBuffer.IconScratch` (`0x30000`
   bytes past the card messages, three slots: weapon, magic, hotkey), at a control tick
-  and only when the box's item changes. **The pose is worked out once, at the read, and
-  held still**: a weapon is stood on its longest axis, turned so its vertices spread
-  widest across it (the flat of the blade to the eye; the box's area hardly moves with a
-  blade's thickness, and picked the edge), and laid on the diagonal with its narrow end
-  (the point; the guard is the wide end) up and right; anything else is turned to show
-  the largest box and tipped 22 degrees toward the eye. The matrix is built in C#, so
-  the box it is measured in is the box it is drawn in: the projected corners fill the
-  card's inside (16 pixels: the card less the bevel), centred. (The first version spun each model and scaled it by its
-  3D radius, which left a dagger a sliver.)
+  and only when the box's item changes. **Posed large and cropped, as Demon's Souls
+  frames its equipment** (asked for after the whole-model fit, which read as small): the
+  pose is worked out once per model and card inside (21 x 33) and held still. A weapon is
+  stood on its longest axis, turned so its vertices spread widest across it (the flat of
+  the blade to the eye), then 17 degrees off it so the edge shows, and laid along the
+  card's own diagonal (not 45 degrees: the card is tall); a blade's wide end (the guard)
+  goes bottom left and its point runs off the top right, and the morning star, the battle
+  hammer and the crescent axe (ids 3, 4, 6, whose wide end is the head) the other way
+  about. It is drawn as long as 1.45 card diagonals unless its width would leave the
+  card's chord across the diagonal first, centred on a point 0.3 of its length in from
+  the end that names it, shifted 0.05 diagonals toward that end's corner. Anything else
+  (crystals, herbs, keys) is turned to show the largest box, tipped 28 degrees toward the
+  eye, and drawn 1.3 times the size that fits, centred. **Clipped to the inside by the
+  GPU's draw area** (`IconClip`): the ordering table's heads are recorded before the lit
+  assembler runs; every slot whose head moved now starts with the model's packets and
+  ends at the old head, and those are bracketed by two `E3`/`E4` packets out of the
+  frame's primitive buffer, the card's inside and then the frame's own clip, read from
+  the draw environment the frame is drawn under (`0x8017E084` into the DRAWENVs at
+  `0x8018E0AC`). Both renderers honour it (the GL backend as its scissor). With no room
+  for the packets the model is unlinked, not drawn unclipped; a card the draw area
+  cannot express (anchored into the widescreen margin, left of VRAM x 0) is drawn whole
+  in the same pose, fitted. The `hands` verb's `iconClip` counts them. Measured headless,
+  slot 2 in fdat05, one icon: 1,383 models bracketed over 3 slots each, none dropped,
+  none whole. **Not judged by eye**, nor seen through the GL renderer. (The first version
+  spun each model and scaled it by its 3D radius, which left a dagger a sliver; the
+  second fitted the whole projected model in the card.)
 - **A spell is its crystal and a level** (`SpellCrystals`): the item model of its
   element's crystal (FIRE, WATER, EARTH, WIND, LIGHT, DARK CRYSTAL, items 90-95) with a
   Roman numeral in the box's corner, its rank by MP cost (record `+0x16` at

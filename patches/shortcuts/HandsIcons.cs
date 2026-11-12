@@ -6,18 +6,23 @@ namespace Kf2.Shortcuts;
 
 /// <summary>
 /// The HUD boxes' icons: each item's own model, the one the menu's preview shows, posed
-/// once and framed to fill its box. The game has no 2D icons; its HUD (the compass, the
+/// and framed large in its card, as Demon's Souls frames its equipment: cropped by the
+/// card's inside (<see cref="IconClip"/>) rather than shrunk to fit it. The game has no 2D icons; its HUD (the compass, the
 /// HP digits) is small models drawn without perspective, and these are drawn the same
 /// way: the orthographic transform func_8002E910 and the lit assembler func_8002F214 onto
 /// the front of the table, lit as the preview lights its model (func_8002156C: back
 /// colour 60, a white colour matrix, its fixed light matrix turned with the model).
 ///
-/// The pose, worked out once when a model is read: a weapon lies on the diagonal, its
-/// narrow end (the point) up and right, as an inventory icon shows a sword; anything
-/// else stands as it is, tipped a little toward the eye. Either way the turn about the
-/// vertical is the one that shows the most of it. The matrix is built here, so the box
-/// it is measured into is the box it is drawn into: the model's projected corners fill
-/// the box, centred.
+/// The pose, worked out once per model and card: a weapon lies on the card's diagonal,
+/// the flat of its blade to the eye and turned a little off it so its edge shows; a
+/// blade's point runs off the top right with its guard low and left, a weapon whose head
+/// is its wide end (the morning star, the hammer, the axe) the other way about, its head
+/// top right and its haft running off the bottom left. It is as long as 1.45 card
+/// diagonals unless its width would leave the card first, and framed on the end that
+/// names it. Anything else stands as it is, tipped toward the eye, turned to show the most
+/// of it, and drawn 1.3 times the size that would fit, centred. The matrix is built here,
+/// so the box it is measured in is the box it is drawn in. Where the card cannot be
+/// clipped (anchored into the widescreen margin) the same pose is drawn whole, fitted.
 ///
 /// The models: the menu's preview loads one at a time into bank 3 off the model heap
 /// (func_80022CAC: disc file 6, entry = the item id). Three are needed at once, so each
@@ -46,19 +51,29 @@ static class HandsIcons
     const int Back = 60, PreviewFog = 0x59D8;
     static readonly int[] PreviewLight = [0x800, 0x800, -0x800, 0, 0, -0x800, 0x1000, 0, -0x800];
 
-    const int Diagonal = 0x200;                              // 45 degrees, in 4096ths of a turn
-    const int Tip = 0x100;                                   // what a standing item is tipped toward the eye
+    const int Tip = 0x140;                                   // what a standing item is tipped toward the eye (28 degrees)
+    const int EdgeTurn = 0xC0;                               // a blade turned off flat so its edge shows (17 degrees)
+    const double WeaponReach = 1.45;                         // a weapon's length, in card diagonals
+    const double FocusInset = 0.3;                           // the frame's centre, this far along from the naming end
+    const double AnchorShift = 0.05;                         // and placed this far, in diagonals, toward that end's corner
+    const double ItemZoom = 1.3;                             // anything else, this much larger than fits
 
-    /// <summary>One slot: the item it holds (0xFF none), whether that loaded, and the pose
-    /// worked out for it: its turn, the scale that fills a unit box, and the middle of its
-    /// projected corners at that scale.</summary>
+    /// <summary>The weapons whose wide end is the head, not the guard.</summary>
+    static readonly HashSet<byte> HeadWeapons = [3, 4, 6];  // MORNING STAR, BATTLE HAMMER, CRESCENT AXE
+
+    /// <summary>How a model sits in a card: its turn, model units to pixels, the projected
+    /// point (model units) that goes at the card's centre plus the anchor (pixels).</summary>
+    readonly record struct Framing(int[] Turn, double Scale, double FocusX, double FocusY, double AnchorX, double AnchorY);
+
+    /// <summary>One slot: the item it holds (0xFF none), whether that loaded, its vertices,
+    /// and the two framings for the card they were worked out for.</summary>
     struct Slot
     {
         public byte Item;
         public bool Ready;
-        public int[] Turn;                                   // 3x3, 4.12
-        public double Fill;                                  // scale per pixel of box
-        public double MidX, MidY;                            // projected middle per unit of scale
+        public (int X, int Y, int Z)[] Verts;
+        public int CardW, CardH;                             // the inside the framings are for
+        public Framing Posed, Whole;
     }
 
     static readonly Slot[] _slots = [new() { Item = 0xFF }, new() { Item = 0xFF }, new() { Item = 0xFF }];
@@ -100,11 +115,8 @@ static class HandsIcons
             Console.Error.WriteLine($"[KF2] shortcuts: item 0x{item:X2}'s model did not read as a TMD; no icon");
             return;
         }
-        var s = Pose(verts, item < WeaponIds);
-        s.Item = item;
-        s.Ready = true;
-        _slots[slot] = s;
-        if (probe) Console.WriteLine($"[KF2] shortcuts: icon {slot} item 0x{item:X2}, {verts.Length} vertices, fill {s.Fill:F3}");
+        _slots[slot] = new Slot { Item = item, Ready = true, Verts = verts };
+        if (probe) Console.WriteLine($"[KF2] shortcuts: icon {slot} item 0x{item:X2}, {verts.Length} vertices");
     }
 
     /// <summary>The first object's vertices, or null if the bytes do not look like a model.</summary>
@@ -124,31 +136,78 @@ static class HandsIcons
 
     // ---- the pose ----
 
-    static Slot Pose((int X, int Y, int Z)[] v, bool weapon)
+    /// <summary>Works out both framings of <paramref name="item"/> for a card inside of
+    /// <paramref name="w"/> by <paramref name="h"/> pixels.</summary>
+    static (Framing Posed, Framing Whole) Frame((int X, int Y, int Z)[] v, byte item, int w, int h)
     {
-        // A weapon is turned so its long axis is the model's vertical first.
-        int[] upright = weapon ? LongAxisUp(v) : Identity();
-        int[] best = upright;
+        if (item >= WeaponIds) return FrameItem(v, w, h);
+        return FrameWeapon(v, w, h, HeadWeapons.Contains(item));
+    }
+
+    static (Framing, Framing) FrameItem((int X, int Y, int Z)[] v, int w, int h)
+    {
+        int[] best = Identity();
         double bestArea = -1;
         for (int yaw = 0; yaw < 0x1000; yaw += 0x80)
         {
-            int[] stood = Mul(Ry(yaw), upright);
-            int[] t = weapon ? Mul(Rz(PointUpRight(v, stood)), stood) : Mul(Rx(Tip), stood);
-            // How much of it shows. A blade's box hardly changes with its thickness, so a
-            // weapon is judged by how far its vertices spread across the blade, which is
-            // widest with the flat to the eye; anything else by its box.
-            double area;
-            if (weapon) area = SpreadX(v, stood);
-            else
-            {
-                var (w, h, _, _) = Extent(v, t);
-                area = w * h;
-            }
-            if (area > bestArea + 1e-6) { bestArea = area; best = t; }
+            int[] t = Mul(Rx(Tip), Ry(yaw));
+            var (bw, bh, _, _) = Extent(v, t);
+            if (bw * bh > bestArea + 1e-6) { bestArea = bw * bh; best = t; }
         }
-        var (bw, bh, mx, my) = Extent(v, best);
-        double size = Math.Max(1, Math.Max(bw, bh));
-        return new Slot { Turn = best, Fill = 1.0 / size, MidX = mx / size, MidY = my / size };
+        var (ew, eh, mx, my) = Extent(v, best);
+        double fit = Math.Min(w / Math.Max(1, ew), h / Math.Max(1, eh));
+        return (new Framing(best, fit * ItemZoom, mx, my, 0, 0), new Framing(best, fit, mx, my, 0, 0));
+    }
+
+    /// <summary>A weapon on the card's diagonal, the end that names it (the guard, or a
+    /// head) framed and the other end running off the card.</summary>
+    static (Framing, Framing) FrameWeapon((int X, int Y, int Z)[] v, int w, int h, bool headUp)
+    {
+        // Stood on its long axis, the flat of the blade to the eye, then a little off it.
+        int[] upright = LongAxisUp(v);
+        int bestYaw = 0;
+        double bestSpread = -1;
+        for (int yaw = 0; yaw < 0x1000; yaw += 0x80)
+        {
+            double spread = SpreadX(v, Mul(Ry(yaw), upright));
+            if (spread > bestSpread + 1e-6) { bestSpread = spread; bestYaw = yaw; }
+        }
+        int[] stood = Mul(Ry(bestYaw + EdgeTurn), upright);
+
+        // Rolled onto the diagonal: Rz takes (0, -1) to (sin, -cos), so this angle lays
+        // the top of the stood model along the diagonal toward the top right.
+        double diag = Math.Sqrt(w * w + h * h);
+        int roll = (int)Math.Round(Math.Atan2(w, h) * 4096 / (2 * Math.PI));
+        bool wideAtTop = WideEndAtTop(v, stood);
+        if (wideAtTop != headUp) roll += 0x800;
+        int[] turn = Mul(Rz(roll), stood);
+
+        // Along the diagonal (u, toward the top right) and across it (n).
+        double ux = w / diag, uy = -h / diag, nx = h / diag, ny = w / diag;
+        double sMin = double.MaxValue, sMax = double.MinValue, qMin = double.MaxValue, qMax = double.MinValue;
+        foreach (var q in v)
+        {
+            var (x, y, _) = Apply(turn, q);
+            double along = x * ux + y * uy, across = x * nx + y * ny;
+            sMin = Math.Min(sMin, along); sMax = Math.Max(sMax, along);
+            qMin = Math.Min(qMin, across); qMax = Math.Max(qMax, across);
+        }
+        double length = Math.Max(1, sMax - sMin), width = Math.Max(1, qMax - qMin);
+
+        // As long as WeaponReach diagonals, unless its width would leave the card's
+        // chord across the diagonal through the centre first.
+        double room = diag * Math.Min((double)w / h, (double)h / w);
+        double scale = Math.Min(WeaponReach * diag / length, room / width);
+
+        double toEnd = headUp ? 1 : -1;                      // the named end: top right, or bottom left
+        double sFocus = headUp ? sMax - FocusInset * length : sMin + FocusInset * length;
+        double qFocus = (qMin + qMax) / 2;
+        double fx = sFocus * ux + qFocus * nx, fy = sFocus * uy + qFocus * ny;
+        double shift = toEnd * AnchorShift * diag;
+        var (ew, eh, mx, my) = Extent(v, turn);
+        double fit = Math.Min(w / Math.Max(1, ew), h / Math.Max(1, eh));
+        return (new Framing(turn, Math.Max(scale, fit), fx, fy, shift * ux, shift * uy),
+                new Framing(turn, fit, mx, my, 0, 0));
     }
 
     /// <summary>Turns the model so its longest bounding-box axis is vertical.</summary>
@@ -160,9 +219,9 @@ static class HandsIcons
         return sx >= sz ? Rz(0x400) : Rx(0x400);
     }
 
-    /// <summary>The roll that puts the vertical axis on the diagonal with the narrow end
-    /// (a blade's point; the hilt's guard is the wide end) up and right.</summary>
-    static int PointUpRight((int X, int Y, int Z)[] v, int[] t)
+    /// <summary>True if the stood model's wide end (a blade's guard; a mace's head) is at
+    /// the top of the screen: the wider of its top and bottom fifths.</summary>
+    static bool WideEndAtTop((int X, int Y, int Z)[] v, int[] t)
     {
         var p = v.Select(q => Apply(t, q)).ToArray();
         double minY = p.Min(q => q.Y), maxY = p.Max(q => q.Y), band = (maxY - minY) * 0.2;
@@ -171,10 +230,7 @@ static class HandsIcons
             var xs = p.Where(q => inBand(q.Y)).Select(q => q.X).ToArray();
             return xs.Length == 0 ? 0 : xs.Max() - xs.Min();
         }
-        double top = Width(y => y <= minY + band), bottom = Width(y => y >= maxY - band);
-        // Screen Y grows down, and Rz takes (0, -1) to (sin, -cos): with the narrow end at
-        // the top, +45 degrees leans it up and right; with it at the bottom, 180 + 45.
-        return top <= bottom ? Diagonal : 0x800 + Diagonal;
+        return Width(y => y <= minY + band) > Width(y => y >= maxY - band);
     }
 
     /// <summary>The variance of the vertices' X after <paramref name="t"/>: with the long
@@ -235,18 +291,27 @@ static class HandsIcons
     /// <summary>True if <paramref name="slot"/> has a model ready for <paramref name="item"/>.</summary>
     internal static bool Ready(int slot, byte item) => _slots[slot].Ready && _slots[slot].Item == item;
 
-    /// <summary>Draws slot <paramref name="slot"/>'s model in its pose, filling a
-    /// <paramref name="size"/>-pixel square centred on (x, y), at depth <paramref name="z"/>.
-    /// Inside the HUD builder's post-hook.</summary>
-    internal static void Draw(CpuContext c, IMemory m, int slot, int x, int y, int size, int z)
+    /// <summary>Draws slot <paramref name="slot"/>'s model in its pose in the card inside
+    /// (x, y, w, h), at depth <paramref name="z"/>: large and clipped to the inside, or
+    /// whole and fitted where it cannot be clipped. Inside the HUD builder's post-hook.</summary>
+    internal static void Draw(CpuContext c, IMemory m, int slot, int x, int y, int w, int h, int z)
     {
-        var s = _slots[slot];
+        ref var s = ref _slots[slot];
         if (!s.Ready) return;
-        double k = s.Fill * size;                            // model units to pixels
+        if (s.CardW != w || s.CardH != h)
+        {
+            (s.Posed, s.Whole) = Frame(s.Verts, s.Item, w, h);
+            (s.CardW, s.CardH) = (w, h);
+        }
+        var clip = IconClip.For(m, x, y, w, h);
+        bool clipped = clip.HasValue && IconClip.Mark(m);  // the table's heads, before the model is linked
+        var f = clipped ? s.Posed : s.Whole;
+
         var draw = new int[9];
-        for (int i = 0; i < 9; i++) draw[i] = Math.Clamp((int)Math.Round(s.Turn[i] * k), short.MinValue, short.MaxValue);
-        var light = Mul(PreviewLight, s.Turn);
-        int tx = x - (int)Math.Round(s.MidX * size), ty = y - (int)Math.Round(s.MidY * size);
+        for (int i = 0; i < 9; i++) draw[i] = Math.Clamp((int)Math.Round(f.Turn[i] * f.Scale), short.MinValue, short.MaxValue);
+        var light = Mul(PreviewLight, f.Turn);
+        int tx = (int)Math.Round(x + w / 2.0 + f.AnchorX - f.FocusX * f.Scale);
+        int ty = (int)Math.Round(y + h / 2.0 + f.AnchorY - f.FocusY * f.Scale);
 
         uint tmd = Base(slot);
         uint savedModel = m.ReadU32(CurrentModel), savedVerts = m.ReadU32(VertexBase);
@@ -270,6 +335,7 @@ static class HandsIcons
             Call(c, m, KingsField2.func_8002E1F0, 0);
             Call(c, m, KingsField2.func_8002E910, m.ReadU32(tmd + TmdHeader + 4));
             Call(c, m, KingsField2.func_8002F214, 0, 0);
+            if (clipped) IconClip.Wrap(m, clip!.Value);
         }
         finally
         {

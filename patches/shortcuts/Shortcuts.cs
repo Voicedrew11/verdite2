@@ -675,7 +675,7 @@ public static class Shortcuts
                ",\"spell\":" + m.ReadU8(Hands.AttackSpell) + ",\"spellOut\":" + (l.Out + 1) + ",\"spellAway\":" + l.Away +
                ",\"hotkey\":" + (_hotkey + 1) + ",\"holds\":" + HeldJson(m, _hotkey) +
                ",\"select\":[" + m.ReadU8(SlotSpell) + "," + m.ReadU8(SlotItem) + "]" +
-               ",\"queued\":" + _shellPress + "}";
+               ",\"queued\":" + _shellPress + ",\"iconClip\":" + IconClip.Json + "}";
     }
 
     static string HeldJson(IMemory m, int row)
