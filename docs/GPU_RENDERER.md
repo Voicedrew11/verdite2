@@ -1902,3 +1902,38 @@ it runs only when the map's hash changes. `KF2_FPS=144 KF2_FPS_PROBE=1` after it
 144.0 fps drawn at 14.9-15.0 ticks/s.
 
 **Mechanism measured over every area's mesh; the picture not judged.**
+
+## A rebuild for a half that draws nothing (2026-11-11)
+
+**The random hitch in play was a whole map rebuild.** Three saved profiles
+(`Shift+P`, area 1 from slot 2) held 67-74 ms frames every few seconds with no menu
+open, each with 24-28 MB allocated and 57-59 ms booked to `replace
+TileWalk.ReplaceWalk`, often in pairs on two consecutive frames. Normal play otherwise
+runs at 8.3 ms with no other frame above 12 ms. The tile walk is where
+`RetainedMap.AtWalk` runs, and a build of area 1's 67,501 triangles now costs 55-70 ms
+(the hairline merge above included; it was 11.8 ms before that).
+
+**What changed the hash.** `KF2_GPUWORLD_PROBE=1` with a diff of the live map behind
+each `map` build, while the shell's `goto` moved the player round the area: every build
+after the load came from upper halves of model `0xFE`, in 3x3 blocks, whose `+2` went
+`00` to `03` or `01` to `00`. These are an object's footprint written over the tiles
+it stands on (see "The rewrite census" in `REMASTER.md`), and the low two bits of `+2`
+are the turn, which `MeshBytes` hashes. A model of 240 or more draws nothing (the
+builder, the tile walk and the swell all skip it), so the write changed nothing that
+is drawn. `WaterSwell.Hash` reads the same bits, so its own rebuild followed. Its
+`Generation` is part of the map's extra hash, so the map rebuilt a second time on the
+next frame. That is the pair.
+
+**The fix.** `RetainedMap.HalfKey` is one value (`0xFF`) for a half of model 240 or
+more, whatever its other bytes hold, and both hashes read it. A half that becomes
+drawable still changes the hash. Measured with the same `goto` roam (40 moves over 50 s):
+before, 3 rebuilds after the load's two; after, none. `KF2_FPS=144 KF2_FPS_PROBE=1`:
+140-144 fps drawn at 14.9 ticks/s.
+
+**Still a rebuild:** a rewrite of a drawn half (a door, the drawbridge, a lift) costs a
+whole build of 55-70 ms. Making the build incremental, per changed half, is the
+remaining fix. The two menu-transition spikes in the first profile (48 and 72 ms,
+14-22 MB, booked to the menu loop's own time) are not explained by this and were not
+reproduced.
+
+**Mechanism measured; the hitch's absence in play not yet confirmed by the player.**

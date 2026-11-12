@@ -135,10 +135,12 @@ public static class WaterSwell
         for (int i = 0; i < WaterWaves.RectN * 4; i++) Mix((uint)(int)WaterWaves.Rects[i]);
         var ram = mem.Ram;
         int at = (int)(MapBase & (uint)(ram.Length - 1));
+        // A half that draws nothing is one value: the game writes footprints into
+        // empty halves' turn bits as play goes on (RetainedMap.HalfKey).
         for (int i = 0; i < 6400; i++, at += 10)
         {
-            Mix((uint)(ram[at] | ram[at + 1] << 8 | (ram[at + 2] & 3) << 16));
-            Mix((uint)(ram[at + 5] | ram[at + 6] << 8 | (ram[at + 7] & 3) << 16));
+            Mix(RetainedMap.HalfKey(ram.Slice(at, 5)) & 0x3FFFFu);
+            Mix(RetainedMap.HalfKey(ram.Slice(at + 5, 5)) & 0x3FFFFu);
         }
         return h;
     }

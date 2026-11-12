@@ -199,18 +199,27 @@ public static class RetainedMap
 
     /// <summary>Only what a half's mesh is built from -- its model, height, the low
     /// two bits of the turn and the low six of the light record -- since the game
-    /// writes other bits of the map as it runs.</summary>
+    /// writes other bits of the map as it runs. A half that draws nothing (model 240
+    /// or more) is one value whatever its other bytes hold: the game writes a standing
+    /// object's footprint into the turn bits of empty upper halves (`0xFE`) as play
+    /// goes on, and each write was a whole rebuild, 55-70 ms (see "A rebuild for a
+    /// half that draws nothing" in docs/GPU_RENDERER.md).</summary>
     static ulong MeshBytes(ReadOnlySpan<byte> map)
     {
         ulong h = 0xCBF29CE484222325ul;
         for (int i = 0; i + 10 <= map.Length; i += 10)
         {
-            ulong w = map[i] | (ulong)map[i + 1] << 8 | (ulong)(map[i + 2] & 3) << 16 | (ulong)(map[i + 4] & 0x3F) << 24
-                    | (ulong)map[i + 5] << 32 | (ulong)map[i + 6] << 40 | (ulong)(map[i + 7] & 3) << 48 | (ulong)(map[i + 9] & 0x3F) << 56;
+            ulong w = (ulong)HalfKey(map.Slice(i, 5)) | (ulong)HalfKey(map.Slice(i + 5, 5)) << 32;
             h = (h ^ w) * 0x100000001B3ul;
         }
         return h;
     }
+
+    /// <summary>The bytes of one half its mesh is built from, or 0xFF for a half that
+    /// draws nothing.</summary>
+    public static uint HalfKey(ReadOnlySpan<byte> half) => half[0] >= 240
+        ? 0xFFu
+        : half[0] | (uint)half[1] << 8 | (uint)(half[2] & 3) << 16 | (uint)(half[4] & 0x3F) << 24;
 
     static ulong _hm, _hl, _he, _lightHash;
 
