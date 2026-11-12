@@ -13,7 +13,7 @@ namespace Kf2.Shortcuts;
 ///
 /// Laid out in the game's pixels to work at 240p: the cards are 28 x 42, a pixel apart,
 /// as wide together as the HP panel, their bevel BevelLess pixels a side narrower than the
-/// panel's for room inside; their digits and numerals are the menu's fonts at
+/// panel's for room inside; their digits and numerals are the number font at
 /// their own size. The margins are the panel's: its left edge, and its distance from the
 /// top as the distance from the bottom. They follow the panel to the screen's edge when
 /// the HUD is anchored (<see cref="Widescreen.AnchoredHudX"/>).
@@ -33,9 +33,9 @@ static class HandsHud
     const uint PanelDrawn = Stage13.HudRecords + Stage13.HudStride;   // record 1's +0: u8 1 while the HP panel draws
     const uint ContentDepth = PanelDrawn + 0x14;                      // record 1's Z: the panel's letters and digits
     const uint Descriptor = MenuDraw.ActiveDescriptor;
-    const uint TextTemplate = MenuDraw.TextTemplate, NumberTemplate = MenuDraw.NumberTemplate;
+    const uint NumberTemplate = MenuDraw.NumberTemplate;
     const int Slot = 1;
-    const byte White = 0xFF, TextGrey = 0x80;
+    const byte TextGrey = 0x80;
     const int Room = 64 * MenuDraw.QuadBytes;                         // ours, the models' and the frames'
     const int ScreenHeight = 240;
 
@@ -146,30 +146,22 @@ static class HandsHud
         for (int i = 0; i < digits.Length; i++) Digit(m, at + i * w, iy + ih - h, digits[i]);
     }
 
-    /// <summary>A spell's level as a Roman numeral in the inside's bottom left corner.</summary>
+    /// <summary>A spell's level as a Roman numeral in the inside's bottom left corner, in
+    /// the number font the counts and the HP panel use: its 1 is a serifed I, and V and X
+    /// are among its signs (the game spells LV and EXP with them).</summary>
     static void Numeral(IMemory m, int x, int y, int level)
     {
         var (ix, iy, _, ih) = Inside(x, y);
-        Capitals(m, ix, iy + ih - (short)m.ReadU16(TextTemplate + 0xA), SpellCrystals.Roman(level));
-    }
-
-    const int CellWidth = 8, NarrowAdvance = 4;
-
-    /// <summary>Capital letters in the menu's font at their own size, top left at (x, y),
-    /// an I advanced less than its cell.</summary>
-    static void Capitals(IMemory m, int x, int y, string text)
-    {
-        int w = (short)m.ReadU16(TextTemplate + 8), h = (short)m.ReadU16(TextTemplate + 0xA);
-        int uw = m.ReadU8(TextTemplate + 8), vh = m.ReadU8(TextTemplate + 0xA);
-        foreach (char ch in text)
+        int h = (short)m.ReadU16(NumberTemplate + 0xA);
+        foreach (char ch in SpellCrystals.Roman(level))
         {
-            int g = ch - 'A';                                // the disc's capitals, cells 0-25
-            MenuDraw.Quad(m, TextTemplate, x, y, w, h, (g & 15) * 8, (g >> 4) * 15, uw, vh, White, false, Slot);
-            x += Advance(ch);
+            Digit(m, ix, iy + ih - h, ch switch { 'I' => One, 'V' => SignV, _ => SignX });
+            ix += ch == 'I' ? NarrowAdvance : DigitWidth(m);
         }
     }
 
-    static int Advance(char ch) => ch == 'I' ? NarrowAdvance : CellWidth;
+    const byte One = 1, SignV = 17, SignX = 18;              // the number strip's cells
+    const int NarrowAdvance = 5;                             // an I, narrower than its 7-pixel cell
 
     static int DigitWidth(IMemory m) => (short)m.ReadU16(NumberTemplate + 8);
 

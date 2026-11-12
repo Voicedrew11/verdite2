@@ -4050,8 +4050,11 @@ swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
   the game's own pixels: the cards are 28 x 42, a pixel apart, 86 wide together as the
   HP panel is; no button labels (the `LB` and `RB` over the hands' outer top corners,
   which had replaced slot numbers, were taken off as clutter); an item hotkey its count in the bottom
-  right, a spell its numeral in the bottom left, each in the
-  menu's fonts at their own size (digits 7 x 14, capitals 8 x 15, an I advanced 4). No
+  right, a spell its numeral in the bottom left, both in the
+  number font the counts and the HP panel use, at its own size (7 x 14): the numeral's I
+  is the font's serifed 1, advanced 5, and its V and X are the strip's signs 17 and 18,
+  the cells the game spells LV and EXP with (it was the menu's white capitals, which did
+  not match; reported from play). No
   names: the model and the number say it. **The margins are the panel's**: its left
   edge (record 13's X, native 5, moved out by `Widescreen.AnchoredHudX` when the HUD is
   anchored; `Widescreen.NativeHudX` reads the native X inside the builder's hooks in
