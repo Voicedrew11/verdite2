@@ -4100,9 +4100,14 @@ swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
   bytes past the card messages, three slots: weapon, magic, hotkey), at a control tick
   and only when the box's item changes. **Posed large and cropped, as Demon's Souls
   frames its equipment** (asked for after the whole-model fit, which read as small): the
-  pose is worked out once per model and card inside (21 x 33) and held still. A weapon is
-  stood on its longest axis, turned so its vertices spread widest across it (the flat of
-  the blade to the eye), then 17 degrees off it so the edge shows, and laid along the
+  pose is worked out once per model and card inside (24 x 36) and held still. A weapon is
+  stood on its length, the line through its two vertices farthest apart (pommel to
+  point), with its flat to the eye (the direction its vertices spread least across that
+  line), then 17 degrees off it so the edge shows. **The models are not drawn along their
+  axes**: the dagger lies diagonally in its own X-Y plane (x -289..269, y -167..210, z
+  -32..32), so standing it on its bounding box's longest axis laid every blade 27 degrees
+  off level with its guard off the card (reported from play; the drawn vertices matched
+  the GTE's to a pixel, so the transform was right and the pose wrong). It is then and laid along the
   card's own diagonal (not 45 degrees: the card is tall); a blade's wide end (the guard)
   goes bottom left and its point runs off the top right, and the morning star, the battle
   hammer and the crescent axe (ids 3, 4, 6, whose wide end is the head) the other way
@@ -4119,7 +4124,9 @@ swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
   `0x8018E0AC`). Both renderers honour it (the GL backend as its scissor). With no room
   for the packets the model is unlinked, not drawn unclipped; a card the draw area
   cannot express (anchored into the widescreen margin, left of VRAM x 0) is drawn whole
-  in the same pose, fitted. The `hands` verb's `iconClip` counts them. Measured headless,
+  in the same pose, fitted. The `hands` verb's `iconClip` counts them. Measured after the
+  fix: the dagger's drawn axis -55.4 degrees, the morning star's -57.3, against the
+  card's diagonal at -56.3. Measured headless,
   slot 2 in fdat05, one icon: 1,383 models bracketed over 3 slots each, none dropped,
   none whole. **Not judged by eye**, nor seen through the GL renderer. (The first version
   spun each model and scaled it by its 3D radius, which left a dagger a sliver; the

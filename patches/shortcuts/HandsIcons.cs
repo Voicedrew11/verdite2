@@ -163,16 +163,8 @@ static class HandsIcons
     /// head) framed and the other end running off the card.</summary>
     static (Framing, Framing) FrameWeapon((int X, int Y, int Z)[] v, int w, int h, bool headUp)
     {
-        // Stood on its long axis, the flat of the blade to the eye, then a little off it.
-        int[] upright = LongAxisUp(v);
-        int bestYaw = 0;
-        double bestSpread = -1;
-        for (int yaw = 0; yaw < 0x1000; yaw += 0x80)
-        {
-            double spread = SpreadX(v, Mul(Ry(yaw), upright));
-            if (spread > bestSpread + 1e-6) { bestSpread = spread; bestYaw = yaw; }
-        }
-        int[] stood = Mul(Ry(bestYaw + EdgeTurn), upright);
+        // Stood on its length, the flat of the blade to the eye, then a little off it.
+        int[] stood = Mul(Ry(EdgeTurn), FlatToEye(v));
 
         // Rolled onto the diagonal: Rz takes (0, -1) to (sin, -cos), so this angle lays
         // the top of the stood model along the diagonal toward the top right.
@@ -210,14 +202,80 @@ static class HandsIcons
                 new Framing(turn, fit, mx, my, 0, 0));
     }
 
-    /// <summary>Turns the model so its longest bounding-box axis is vertical.</summary>
-    static int[] LongAxisUp((int X, int Y, int Z)[] v)
+    /// <summary>The turn that stands a weapon on its length, its flat to the eye. The
+    /// models are not drawn along their axes (the dagger lies diagonally in its own X-Y
+    /// plane), so the length is the line through the two vertices farthest apart, pommel
+    /// to point, and the flat faces the eye across the direction the vertices spread
+    /// least about that line. Rows: across, along, toward the eye; a right-handed turn,
+    /// so the model is not mirrored and its faces keep their winding.</summary>
+    static int[] FlatToEye((int X, int Y, int Z)[] v)
     {
-        int Span(Func<(int X, int Y, int Z), int> f) => v.Max(f) - v.Min(f);
-        int sx = Span(p => p.X), sy = Span(p => p.Y), sz = Span(p => p.Z);
-        if (sy >= sx && sy >= sz) return Identity();
-        return sx >= sz ? Rz(0x400) : Rx(0x400);
+        var along = Unit(FarthestPair(v));
+        double mx = v.Average(q => (double)q.X), my = v.Average(q => (double)q.Y), mz = v.Average(q => (double)q.Z);
+
+        // The spread across the length: a 3x3 covariance of the vertices with their
+        // component along it removed, whose least eigenvector is the blade's thickness.
+        var cov = new double[3, 3];
+        foreach (var q in v)
+        {
+            double[] d = [q.X - mx, q.Y - my, q.Z - mz];
+            double t = d[0] * along[0] + d[1] * along[1] + d[2] * along[2];
+            for (int i = 0; i < 3; i++) d[i] -= t * along[i];
+            for (int i = 0; i < 3; i++)
+                for (int j = 0; j < 3; j++) cov[i, j] += d[i] * d[j];
+        }
+        var thick = Unit(LeastAcross(cov, along));
+        var across = Cross(along, thick);
+        return [Q12(across[0]), Q12(across[1]), Q12(across[2]),
+                Q12(along[0]), Q12(along[1]), Q12(along[2]),
+                Q12(thick[0]), Q12(thick[1]), Q12(thick[2])];
     }
+
+    static double[] FarthestPair((int X, int Y, int Z)[] v)
+    {
+        double best = -1;
+        double[] dir = [0, 1, 0];
+        for (int i = 0; i < v.Length; i++)
+            for (int j = i + 1; j < v.Length; j++)
+            {
+                double dx = v[j].X - v[i].X, dy = v[j].Y - v[i].Y, dz = v[j].Z - v[i].Z;
+                double d = dx * dx + dy * dy + dz * dz;
+                if (d > best) { best = d; dir = [dx, dy, dz]; }
+            }
+        return dir;
+    }
+
+    /// <summary>The direction perpendicular to <paramref name="along"/> in which
+    /// <paramref name="cov"/> is least, found by turning a unit vector round the line.</summary>
+    static double[] LeastAcross(double[,] cov, double[] along)
+    {
+        double[] seed = Math.Abs(along[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+        var a = Unit(Cross(along, seed));
+        var b = Cross(along, a);
+        double best = double.MaxValue;
+        double[] least = a;
+        for (int k = 0; k < 360; k++)
+        {
+            double r = k * Math.PI / 360;                    // half a turn covers every line
+            double[] d = [a[0] * Math.Cos(r) + b[0] * Math.Sin(r), a[1] * Math.Cos(r) + b[1] * Math.Sin(r), a[2] * Math.Cos(r) + b[2] * Math.Sin(r)];
+            double var_ = 0;
+            for (int i = 0; i < 3; i++)
+                for (int j = 0; j < 3; j++) var_ += d[i] * cov[i, j] * d[j];
+            if (var_ < best) { best = var_; least = d; }
+        }
+        return least;
+    }
+
+    static double[] Cross(double[] a, double[] b) =>
+        [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+
+    static double[] Unit(double[] a)
+    {
+        double n = Math.Sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+        return n == 0 ? [0, 1, 0] : [a[0] / n, a[1] / n, a[2] / n];
+    }
+
+    static int Q12(double x) => (int)Math.Round(x * 4096);
 
     /// <summary>True if the stood model's wide end (a blade's guard; a mace's head) is at
     /// the top of the screen: the wider of its top and bottom fifths.</summary>
@@ -231,21 +289,6 @@ static class HandsIcons
             return xs.Length == 0 ? 0 : xs.Max() - xs.Min();
         }
         return Width(y => y <= minY + band) > Width(y => y >= maxY - band);
-    }
-
-    /// <summary>The variance of the vertices' X after <paramref name="t"/>: with the long
-    /// axis vertical, how wide the model looks across it.</summary>
-    static double SpreadX((int X, int Y, int Z)[] v, int[] t)
-    {
-        double sum = 0, sq = 0;
-        foreach (var q in v)
-        {
-            double x = Apply(t, q).X;
-            sum += x;
-            sq += x * x;
-        }
-        double mean = sum / v.Length;
-        return sq / v.Length - mean * mean;
     }
 
     static (double W, double H, double MidX, double MidY) Extent((int X, int Y, int Z)[] v, int[] t)
