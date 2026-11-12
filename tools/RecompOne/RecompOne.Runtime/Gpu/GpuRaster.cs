@@ -274,7 +274,7 @@ public sealed partial class Gpu
         }
     }
 
-    //0111. A run nobody watches can leave the software rasterizer's pixels
+    //0112. A run nobody watches can leave the software rasterizer's pixels
     //unmade: everything up to them (the packet, the vertex map, the prim event)
     //still happens, so the game sees the same GPU. Half a headless frame was here.
     public static bool NoRaster;

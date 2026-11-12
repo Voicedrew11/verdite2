@@ -703,7 +703,7 @@ internal static unsafe class InputManager
         return AxisToByte(_sdl.GameControllerGetAxis(ctrl, (GameControllerAxis)index));
     }
 
-    //0112. A pad's own buttons (active low, Controller's layout), rewritten by the
+    //0123. A pad's own buttons (active low, Controller's layout), rewritten by the
     //game before they join the keyboard's: a face-button convention that follows
     //the hardware, not the bindings, so the keyboard, the mouse and anything a
     //port presses itself keep their meaning, and nothing is saved. Runs on the
@@ -713,7 +713,7 @@ internal static unsafe class InputManager
     private static ushort PadButtonsOf(int port, ushort buttons) =>
         PadButtons is { } rewrite ? rewrite(port, buttons) : buttons;
 
-    //0114. The buttons a pad holds this poll only through a stick binding (active
+    //0125. The buttons a pad holds this poll only through a stick binding (active
     //high, Controller's layout): the stick pushed, with nothing else bound to that
     //button held. Read inside PadButtons, so a layout of the game's can tell the
     //d-pad from the stick its default bindings put on the same bits.

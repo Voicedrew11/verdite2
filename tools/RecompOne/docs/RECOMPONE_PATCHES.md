@@ -2071,17 +2071,7 @@ Four files in the directory have no entry below:
   every 2 s from five seconds into the message; after, `wide 125, vram fallback 0`
   for the whole wait. The map item itself not reached by the shell; **not looked
   at.** **No recompile.**
-- `0111-headless-turbo.patch` — a run nobody watches. `Runtime.Headless` (the game
-  sets it; KF2 from `KF2_HEADLESS`) takes `HostWindow` down the path it already had
-  for a failed GL start: no window, no context, `_headless` set. `Audio` opens no
-  device. `ConfigManager.SaveView` returns before asking ImGui for its ini when
-  there is no context, which was a native fault (a settings migration saved the
-  view at boot). `FrameClock` drops its ceiling while `Interrupts.Turbo` is set, so
-  turbo is no longer held to the target rate by the present. `Gpu.NoRaster` skips
-  the software rasterizer's pixels and nothing before them; headless, that was half
-  a frame. Measured in KF2: about 650 frames a second for one run, 430-850 each
-  with six at once, against 250 rasterizing. **No recompile.**
-- `0112-pad-buttons.patch` — a pad's own buttons, rewritable by the game.
+- `0123-pad-buttons.patch` — a pad's own buttons, rewritable by the game.
   `InputManager.PollGamepads` used to AND each pad's buttons straight into the word
   the keyboard had just written; it now builds the pad's word alone, passes it through
   `InputManager.PadButtons` (`(port, buttons) -> buttons`, active low, `Controller`'s
@@ -2093,7 +2083,7 @@ Four files in the directory have no entry below:
   saved on exit, so swapping them in memory would have been saved). Measured in KF2:
   builds, and a headless Japanese run reaches an area through `KF2_AUTOSTART`. **Not
   tried on a pad.** **No recompile.**
-- `0113-static-by-chunk.patch` — the retained static map patched by chunk.
+- `0124-static-by-chunk.patch` — the retained static map patched by chunk.
   `RetainedScene.SetStatic` lays each (range, chunk) slot out with spare room after
   its corners (`ChunkCap`: an eighth more, at least 16 triangles), the room all zero,
   so three spare corners are a degenerate triangle that draws nothing
@@ -2114,9 +2104,9 @@ Four files in the directory have no entry below:
   patch matching a whole layout; the picture hash identical to the build before at
   three spots; 144.0 fps drawn at 14.9-15.0 ticks/s, no GL error under `KF2_GLDEBUG=1`.
   **No recompile.**
-- `0114-stick-buttons.patch` — which of a pad's buttons only a stick holds.
+- `0125-stick-buttons.patch` — which of a pad's buttons only a stick holds.
   The default bindings put the left stick's four directions on the d-pad's bits
-  (`Up = [11, 104]`, …), so the word `0112` hands the game cannot tell a d-pad press
+  (`Up = [11, 104]`, …), so the word `0123` hands the game cannot tell a d-pad press
   from a push of the stick. `InputManager.PollGamepads` now records, before calling
   `PadButtons`, the buttons each pad holds this poll only through a stick binding
   (`StickOnly`: a stick binding pressed and no other binding of that button),

@@ -24,7 +24,7 @@ index 33434c1..f890bf9 100644
          return AxisToByte(_sdl.GameControllerGetAxis(ctrl, (GameControllerAxis)index));
      }
  
-+    //0112. A pad's own buttons (active low, Controller's layout), rewritten by the
++    //0123. A pad's own buttons (active low, Controller's layout), rewritten by the
 +    //game before they join the keyboard's: a face-button convention that follows
 +    //the hardware, not the bindings, so the keyboard, the mouse and anything a
 +    //port presses itself keep their meaning, and nothing is saved. Runs on the
@@ -45,7 +45,7 @@ index a7976e0..a49372d 100644
      // the whole of the reach.
      public static bool IsPadConnected(int pad) => InputManager.IsPadConnected(pad);
  
-+    //0112. A pad's own buttons rewritten before they join the keyboard's; see
++    //0123. A pad's own buttons rewritten before they join the keyboard's; see
 +    //InputManager.PadButtons. Set once, by the game, before the first poll.
 +    public static Func<int, ushort, ushort>? PadButtons
 +    {
