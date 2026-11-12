@@ -91,6 +91,12 @@ public static class PrimBuffer
     /// are not moved (KF2_PRIMBUF=1), and the console's 2 MB is all there is.</summary>
     public static bool HasTextScratch => (TextScratch & 0x1FFFFFFFu) + TextBytes <= RamSize;
 
+    /// <summary>Past the card messages: the item models the Shortcuts HUD draws in its
+    /// boxes, read from the disc into a slot each (<see cref="Shortcuts.HandsIcons"/>).</summary>
+    public const uint IconBytes = 0x30000u;
+    public static uint IconScratch => TextScratch + TextBytes;
+    public static bool HasIconScratch => (IconScratch & 0x1FFFFFFFu) + IconBytes <= RamSize;
+
     /// <summary>The mirrored walk's arena, ordering table and scratch, in that order
     /// after the two buffers; valid only while <see cref="Relocated"/>.</summary>
     public static uint MirrorArena => Base + 2u * Bytes;
@@ -107,7 +113,7 @@ public static class PrimBuffer
     {
         get
         {
-            uint need = Scale > 1 ? (Base & 0x1FFFFFFFu) + 2u * Bytes + MirrorBytes + WaveBytes + PropBytes + TextBytes : MemoryMap.RetailRamSize;
+            uint need = Scale > 1 ? (Base & 0x1FFFFFFFu) + 2u * Bytes + MirrorBytes + WaveBytes + PropBytes + TextBytes + IconBytes : MemoryMap.RetailRamSize;
             if (uint.TryParse(Environment.GetEnvironmentVariable("KF2_RAMSIZE"), out uint mb) && mb is > 0 and <= 8)
                 need = Math.Max(need, mb << 20);
             uint size = MemoryMap.RetailRamSize;

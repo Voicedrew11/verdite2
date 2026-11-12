@@ -10,14 +10,17 @@ using Silk.NET.Input;
 namespace Kf2.Shortcuts;
 
 /// <summary>
-/// The game's Select shortcut, five times over, from the Shortcuts mod (kf2.shortcuts) of
-/// PerdueEgg's verdite2-mods. Any of the five holds an item, an attack spell or a support
-/// spell, assigned from the Equipment page's Select row and used with one press through
-/// the game's own Select code. Stands down while the mod is enabled. See "Shortcuts" in
-/// docs/PATCHES_AND_MODS.md.
+/// Souls-style hands and hotkeys. The right hand holds two weapons and the left two
+/// attack spells (<see cref="Hands"/>); five hotkeys hold an item or a spell each, the
+/// game's Select shortcut five times over, from the Shortcuts mod (kf2.shortcuts) of
+/// PerdueEgg's verdite2-mods. On the pad (<see cref="PadLayout"/>): R1 swings, L1 casts,
+/// Square uses the current hotkey, d-pad Right and Left swap the right and left hands,
+/// Down and Up cycle the hotkeys, and the sticks move. On the keyboard: keys 1-5 use a
+/// hotkey, X and Z swap the hands. Drawn bottom left (<see cref="HandsHud"/>). Stands
+/// down while the mod is enabled. See "Shortcuts" in docs/PATCHES_AND_MODS.md.
 ///
 ///     KF2_SHORTCUTS=0|1       off or on for the run (Gameplay ▸ Shortcuts)
-///     KF2_SHORTCUTS_PROBE=1   a line for each assignment, shortcut fired and card load
+///     KF2_SHORTCUTS_PROBE=1   a line for each assignment, swap, hotkey used and card load
 ///
 /// ---- the game's own shortcut ----
 ///
@@ -43,21 +46,23 @@ namespace Kf2.Shortcuts;
 /// set exactly as before; one of the other four keeps the pick here and skips both;
 /// backing out changes nothing.
 ///
-/// Using: a shortcut's key or pad button latches a press. At the next func_8002957C
-/// Select is pressed on the game's behalf for that one call; for shortcuts 2-5 their
-/// spell or item is first put in the Select slot, and afterwards the slot and the pad
-/// words are put back. Shortcut 1 is the game's Select: its key only presses Select.
+/// The hands are assigned the same way from the weapon page (the game's equip
+/// func_80026210 from 0x8001AA4C) and the attack magic page (its setter 0x80025F70, which
+/// the signature merge misnamed SsSetAutoKeyOffMode, from 0x8001AD68): which of the
+/// hand's two slots. The slot that is out lets the game's setter run.
 ///
-/// The d-pad: a d-pad direction given to a shortcut is taken out of the pad word in the
-/// world, before player control reads it; menus still scroll with it, the sticks are
-/// untouched.
+/// Using: the pad's Square or a hotkey's key latches a press. At the next func_8002957C
+/// Select is pressed on the game's behalf for that one call; for hotkeys 2-5 their
+/// spell or item is first put in the Select slot, and afterwards the slot and the pad
+/// words are put back. Hotkey 1 is the game's Select.
 ///
 /// The Equipment page copies its ten row labels into a buffer on its frame and draws
 /// them from there (func_800209E0 from 0x8001A4B0); with keyboard labels, row 9 is
 /// written as HOTKEYS there before each draw.
 ///
-/// Saving: shortcuts 2-5 are kept beside the card saves as shortcuts_slotN.txt
-/// (<see cref="CardFiles"/>), the mod's own files, so a player's mod shortcuts carry over.
+/// Saving: hotkeys 2-5 are kept beside the card saves as shortcuts_slotN.txt
+/// (<see cref="CardFiles"/>), the mod's own files, so a player's mod shortcuts carry over;
+/// the hands and the current hotkey in hands_slotN.txt beside them.
 ///
 /// Threads: the hooks and the VSync latch run on the game thread; the settings page on
 /// the host thread reads <see cref="Contents"/> and clears a shortcut through
@@ -68,7 +73,6 @@ public static class Shortcuts
     // ---- game addresses ----
     const uint PadNow = 0x80199554, PadLast = 0x80199556;
     const uint SelectMask = 0x8006E578;                      // u32 action-mask entry 4
-    const uint MaskUp = 0x8006E590, MaskDown = 0x8006E594, MaskLeft = 0x8006E59C, MaskRight = 0x8006E598;
     internal const uint SlotSpell = 0x801994AC, SlotItem = 0x801994AD;
     const uint MaxHp = 0x80199426;                           // u16, 0 until a game is loaded
 
@@ -76,11 +80,15 @@ public static class Shortcuts
     const uint PlayerControl = 0x8002957C;
     const uint ListDraw = 0x800209E0;
     const uint SetSpell = 0x80025F80, SetItem = 0x80025FA8;
+    const uint EquipWeapon = 0x80026210, SetAttackSpell = 0x80025F70;
+    const uint HudBuilder = 0x80031D5C;
     const uint CardLoad = 0x80023638, CardSave = 0x80023764;
     const uint GameStart = 0x8004A628, CharacterReset = 0x80025B4C;
 
     const uint SpellSetterRet = 0x8001B088;                  // func_8001AD84 -> func_80025F80
     const uint ItemSetterRet = 0x8001B0A0;                   // func_8001AD84 -> func_80025FA8
+    const uint WeaponPageRet = 0x8001AA4C;                   // func_8001A6E8 -> func_80026210
+    const uint AttackPageRet = 0x8001AD68;                   // func_8001AB48 -> 0x80025F70
     const uint FrameRow = 0x95C, FrameSpells = 0x908, FrameItems = 0x8B8;
     const uint EquipListDraw = 0x8001A4B0;                   // func_8001A2DC -> func_800209E0
     const uint DescCount = 0x1E, DescStride = 0x23, DescRows = 0x24;
@@ -95,26 +103,11 @@ public static class Shortcuts
     const string Owner = "kf2.shortcuts";
     public const string OnKey = "kf2.shortcuts.on";
     public const string LabelsKey = "kf2.shortcuts.labels";
-    public const string DpadKey = "kf2.shortcuts.dpad";
+    public const string WeaponKeyKey = "kf2.shortcuts.keyweapon";
+    public const string SpellKeyKey = "kf2.shortcuts.keyspell";
     public static string KeyKey(int i) => $"kf2.shortcuts.key{i + 1}";
-    public static string PadKey(int i) => $"kf2.shortcuts.pad{i + 1}";
-
-    /// <summary>A pad button a shortcut can take: SDL GameControllerButton indices, the
-    /// encoding HostWindow.IsPadButtonDown takes.</summary>
-    public static readonly (string Name, string Label, int Button)[] PadButtons =
-    [
-        ("None", "-", -1),
-        ("D-pad Up", "Up", 11),
-        ("D-pad Down", "Down", 12),
-        ("D-pad Left", "Left", 13),
-        ("D-pad Right", "Right", 14),
-        ("L3 (left stick click)", "L3", 7),
-        ("R3 (right stick click)", "R3", 8),
-        ("Misc (share / mute)", "Misc", 15),
-    ];
 
     static readonly Key[] DefaultKeys = [Key.Number1, Key.Number2, Key.Number3, Key.Number4, Key.Number5];
-    static readonly int[] DefaultPads = [-1, 11, 12, 13, 14];   // shortcut 1 is on the pad's own Select already
 
     /// <summary>Off by default: not yet played in the port.</summary>
     public static bool Enabled { get; set; }
@@ -123,16 +116,18 @@ public static class Shortcuts
     /// or controller buttons.</summary>
     public static bool KeyboardLabels { get; set; } = true;
 
-    /// <summary>A d-pad direction used by a shortcut does not walk or turn.</summary>
-    public static bool DpadTakeover { get; set; } = true;
-
-    /// <summary>Each shortcut's key; Key.Unknown for none.</summary>
+    /// <summary>Each hotkey's key; Key.Unknown for none.</summary>
     public static readonly Key[] Keys = new Key[Count];
 
-    /// <summary>Each shortcut's pad button, an index into <see cref="PadButtons"/>.</summary>
-    public static readonly int[] Pads = new int[Count];
+    /// <summary>The keys that swap the right hand (weapons) and the left (spells).</summary>
+    public static Key WeaponKey { get; set; } = Key.X;
+    public static Key SpellKey { get; set; } = Key.Z;
 
-    /// <summary>A shortcut whose key the settings page is waiting for, or -1.</summary>
+    /// <summary>The settings page's key rows: the five hotkeys, then the two hands.</summary>
+    public const int KeyRows = Count + 2, WeaponRow = Count, SpellRow = Count + 1;
+
+    /// <summary>A key row (<see cref="KeyRows"/>) whose key the settings page is waiting
+    /// for, or -1.</summary>
     public static int Capture { get; set; } = -1;
 
     /// <summary>The Shortcuts mod is enabled in the Mods panel and does this itself.</summary>
@@ -146,7 +141,7 @@ public static class Shortcuts
         }
     }
 
-    static bool Live => Enabled && !StoodDown;
+    internal static bool Live => Enabled && !StoodDown;
 
     // ---- the shortcuts (index 0, Select, is the game's own and unused here) ----
     internal struct Slot { public byte Spell, Item; }
@@ -156,10 +151,19 @@ public static class Shortcuts
     static readonly string[] _contents = ["", "", "", "", ""];
 
     // ---- input; game thread ----
-    static readonly bool[] _held = new bool[Count];
-    static readonly int[] _latch = new int[Count];
+    static readonly bool[] _held = new bool[KeyRows];
+    static readonly int[] _latch = new int[KeyRows];
     const int LatchFrames = 8;
     static bool _inMenu;
+    static long _lastControlMs;
+
+    /// <summary>A gap longer than this between control ticks means a menu, a message or
+    /// a scene was between them, and the pad's counted presses belong to it.</summary>
+    const int ControlGapMs = 250;
+
+    /// <summary>The hotkey Square uses, 0..4 (0 the game's Select); game thread.</summary>
+    static int _hotkey;
+    internal static int Hotkey => _hotkey;
 
     // ---- the press made on the game's behalf; game thread ----
     static bool _injected, _swapped;
@@ -200,24 +204,43 @@ public static class Shortcuts
             var view = RecompOne.Runtime.Runtime.View;
             if (!_fromEnv) Enabled = view.GetBool(OnKey, Enabled);
             KeyboardLabels = view.GetString(LabelsKey, "keyboard") != "controller";
-            DpadTakeover = view.GetBool(DpadKey, DpadTakeover);
-            for (int i = 0; i < Count; i++)
-            {
-                string k = view.GetString(KeyKey(i), DefaultKeys[i].ToString());
-                Keys[i] = Enum.TryParse<Key>(k, out var key) ? key : Key.Unknown;
-                Pads[i] = PadIndex((int)view.GetFloat(PadKey(i), DefaultPads[i]));
-            }
+            for (int i = 0; i < Count; i++) Keys[i] = ReadKey(view.GetString(KeyKey(i), DefaultKeys[i].ToString()));
+            WeaponKey = ReadKey(view.GetString(WeaponKeyKey, WeaponKey.ToString()));
+            SpellKey = ReadKey(view.GetString(SpellKeyKey, SpellKey.ToString()));
         });
         Event.AddListener<VSyncEvent>(_ => Latch());
+        PadLayout.Install();
+        AgentServer.FastVerbs["hands"] = Shell;
         HookAttach.OnOverlayLoad("shortcuts", Attach);
     }
 
-    static int PadIndex(int button)
+    static Key ReadKey(string name) => Enum.TryParse<Key>(name, out var key) ? key : Key.Unknown;
+
+    /// <summary>Key row <paramref name="row"/>'s key (<see cref="KeyRows"/>).</summary>
+    public static Key KeyOf(int row) => row switch
     {
-        for (int p = 0; p < PadButtons.Length; p++)
-            if (PadButtons[p].Button == button) return p;
-        return 0;
+        WeaponRow => WeaponKey,
+        SpellRow => SpellKey,
+        _ => Keys[row],
+    };
+
+    /// <summary>Sets key row <paramref name="row"/>; host thread (the settings page).</summary>
+    public static void SetKey(int row, Key key)
+    {
+        switch (row)
+        {
+            case WeaponRow: WeaponKey = key; break;
+            case SpellRow: SpellKey = key; break;
+            default: Keys[row] = key; break;
+        }
     }
+
+    public static string KeyKeyOf(int row) => row switch
+    {
+        WeaponRow => WeaponKeyKey,
+        SpellRow => SpellKeyKey,
+        _ => KeyKey(row),
+    };
 
     static readonly HashSet<uint> _hooked = [];
 
@@ -232,6 +255,9 @@ public static class Shortcuts
         (CardSave, "", nameof(AfterCardSave)),
         (GameStart, nameof(OnGameStart), ""),
         (CharacterReset, nameof(BeforeCharacterReset), ""),
+        (EquipWeapon, nameof(BeforeEquipWeapon), ""),
+        (SetAttackSpell, nameof(BeforeSetAttackSpell), ""),
+        (HudBuilder, "", nameof(AfterHud)),
     ];
 
     static bool Attach()
@@ -317,12 +343,10 @@ public static class Shortcuts
     static void Latch()
     {
         bool typing = Typing;
-        for (int i = 0; i < Count; i++)
+        for (int i = 0; i < KeyRows; i++)
         {
-            var key = Keys[i];
-            int pad = PadButtons[Pads[i]].Button;
-            bool down = (!typing && key != Key.Unknown && HostWindow.IsKeyDown(key))
-                     || (pad >= 0 && HostWindow.IsPadButtonDown(pad));
+            var key = KeyOf(i);
+            bool down = !typing && key != Key.Unknown && HostWindow.IsKeyDown(key);
             if (_inMenu || Capture >= 0 || !Live) _latch[i] = 0;
             else if (down && !_held[i]) _latch[i] = LatchFrames;
             else if (_latch[i] > 0) _latch[i]--;
@@ -330,29 +354,53 @@ public static class Shortcuts
         }
     }
 
-    public static void BeforeMenu(CpuContext c, IMemory m) => _inMenu = true;
+    public static void BeforeMenu(CpuContext c, IMemory m)
+    {
+        _inMenu = true;
+        PadLayout.Forget();
+    }
 
     public static void AfterMenu(CpuContext c, IMemory m)
     {
         _inMenu = false;
         Array.Clear(_latch);
+        PadLayout.Forget();
     }
 
     // ---- using a shortcut: Select, pressed on the game's behalf ----
 
     public static void BeforeControl(CpuContext c, IMemory m)
     {
-        if (!Live || m.ReadU16(MaxHp) == 0) return;
+        if (!Live || m.ReadU16(MaxHp) == 0)
+        {
+            PadLayout.Forget();
+            return;
+        }
+        long now = Environment.TickCount64;
+        if (now - _lastControlMs > ControlGapMs) PadLayout.Forget();
+        _lastControlMs = now;
+
         ReadContents(m);
+        PadLayout.Rewrite(m);
+        Hands.Tick(c, m, _probe);
 
-        if (DpadTakeover) TakeDpad(m);
+        int asked = Interlocked.Exchange(ref _shellPress, -1);
+        if (asked >= 0) TakeShellAway(m);
+        bool Asked(PadLayout.Press p) => asked == (int)p;
 
-        int fire = Array.FindIndex(_latch, l => l > 0);
-        if (fire < 0) return;
+        if (PadLayout.Take(PadLayout.Press.SwapWeapon) > 0 | Fired(WeaponRow) | Asked(PadLayout.Press.SwapWeapon)) Hands.SwapWeapon(c, m, _probe);
+        if (PadLayout.Take(PadLayout.Press.SwapSpell) > 0 | Fired(SpellRow) | Asked(PadLayout.Press.SwapSpell)) Hands.SwapSpell(m, _probe);
+        Cycle(m, PadLayout.Take(PadLayout.Press.NextHotkey) - PadLayout.Take(PadLayout.Press.PreviousHotkey)
+                 + (Asked(PadLayout.Press.NextHotkey) ? 1 : 0) - (Asked(PadLayout.Press.PreviousHotkey) ? 1 : 0));
+        HandsHud.Prepare(c, m, _probe);
+
+        int fire = Array.FindIndex(_latch, 0, Count, l => l > 0);
+        if (PadLayout.Take(PadLayout.Press.UseHotkey) > 0 | Asked(PadLayout.Press.UseHotkey)) fire = _hotkey;
         Array.Clear(_latch);
-        if (_probe) Console.WriteLine($"[KF2] shortcuts: shortcut {fire + 1} fired");
+        if (fire < 0) return;
+        if (_probe) Console.WriteLine($"[KF2] shortcuts: hotkey {fire + 1} used");
 
-        // Shortcut 1 is the game's Select as it stands; 2-5 lend it their contents.
+        // Hotkey 1 is the game's Select as it stands; 2-5 lend it their contents.
         _swapped = false;
         if (fire > 0)
         {
@@ -373,18 +421,26 @@ public static class Shortcuts
         _injected = true;
     }
 
-    /// <summary>A d-pad direction that is a shortcut is not also a step or a turn.</summary>
-    static void TakeDpad(IMemory m)
+    static bool Fired(int row) => _latch[row] > 0;
+
+    /// <summary>Steps the current hotkey <paramref name="steps"/> along the ones that
+    /// hold something (back for a negative count); stays put when none does.</summary>
+    static void Cycle(IMemory m, int steps)
     {
-        ushort now = m.ReadU16(PadNow), was = now;
-        for (int i = 0; i < Count; i++)
-        {
-            int b = PadButtons[Pads[i]].Button;
-            if (b < 11 || b > 14 || !HostWindow.IsPadButtonDown(b)) continue;
-            uint mask = b switch { 11 => MaskUp, 12 => MaskDown, 13 => MaskLeft, _ => MaskRight };
-            now &= (ushort)~m.ReadU32(mask);
-        }
-        if (now != was) m.WriteU16(PadNow, now);
+        if (steps == 0) return;
+        int dir = Math.Sign(steps), at = _hotkey;
+        for (int n = Math.Abs(steps); n > 0; n--)
+            for (int k = 1; k <= Count; k++)
+            {
+                int next = ((at + dir * k) % Count + Count) % Count;
+                var (spell, item) = Labels.Held(m, next);
+                if (spell == None && item == None) continue;
+                at = next;
+                break;
+            }
+        if (at == _hotkey) return;
+        _hotkey = at;
+        if (_probe) Console.WriteLine($"[KF2] shortcuts: hotkey {at + 1} current");
     }
 
     public static void AfterControl(CpuContext c, IMemory m)
@@ -413,7 +469,67 @@ public static class Shortcuts
         Labels.WriteCells(m, buf + SelectRow * Labels.NameStride, cells);
     }
 
-    // ---- assigning: which shortcut, asked before the game's setters run ----
+    // ---- assigning: which hotkey or which slot of a hand, asked before the game's setters run ----
+
+    static readonly Picker.Question HotkeyQuestion = new()
+    {
+        Title = () => KeyboardLabels ? Labels.Word("hotkeys", "Hotkeys") : Labels.Word("shortcuts", "Shortcuts"),
+        Rows = Count,
+        Label = r => Labels.Word(null, Labels.Label(r)),
+        Holds = Labels.Contents,
+    };
+
+    static readonly Picker.Question WeaponQuestion = new()
+    {
+        Title = () => Labels.Word("right", "Right hand"),
+        Rows = 2,
+        Label = r => Labels.Word(null, $"Weapon {r + 1}"),
+        Holds = (m, r) => Labels.Name(m, None, Hands.InSlot(Hands.Right, m.ReadU8(Hands.Weapon), r)) ?? Labels.Word("empty", "Empty"),
+    };
+
+    static readonly Picker.Question SpellQuestion = new()
+    {
+        Title = () => Labels.Word("left", "Left hand"),
+        Rows = 2,
+        Label = r => Labels.Word(null, $"Magic {r + 1}"),
+        Holds = (m, r) => Labels.Name(m, Hands.InSlot(Hands.Left, m.ReadU8(Hands.AttackSpell), r), None) ?? Labels.Word("empty", "Empty"),
+    };
+
+    /// <summary>Which slot of the right hand a weapon from the weapon page goes in;
+    /// false skips the game's equip (the slot is not the one out, or backed out).</summary>
+    public static bool BeforeEquipWeapon(CpuContext c, IMemory m)
+    {
+        if (!Live || c.RA != WeaponPageRet) return true;
+        byte id = (byte)c.A0;
+        int slot = Ask(c, m, WeaponQuestion, None, id, "weapon");
+        return slot >= 0 && Hands.AssignWeapon(m, slot, id);
+    }
+
+    /// <summary>Which slot of the left hand an attack spell goes in; as <see cref="BeforeEquipWeapon"/>.</summary>
+    public static bool BeforeSetAttackSpell(CpuContext c, IMemory m)
+    {
+        if (!Live || c.RA != AttackPageRet) return true;
+        byte id = (byte)c.A0;
+        int slot = Ask(c, m, SpellQuestion, id, None, "spell");
+        return slot >= 0 && Hands.AssignSpell(m, slot, id);
+    }
+
+    /// <summary>The picker, run; a failure picks the slot that is out, so the game's own
+    /// setter runs as it would have.</summary>
+    static int Ask(CpuContext c, IMemory m, Picker.Question q, byte spell, byte item, string what)
+    {
+        int choice;
+        try { choice = Picker.Run(c, m, q, spell, item); }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine($"[KF2] shortcuts: the picker failed, the game's own setter runs -- {e}");
+            return q == WeaponQuestion ? Hands.Right.Out : q == SpellQuestion ? Hands.Left.Out : 0;
+        }
+        if (_probe)
+            Console.WriteLine($"[KF2] shortcuts: {what} spell 0x{spell:X2} item 0x{item:X2} -> " +
+                              (choice < 0 ? "backed out" : $"row {choice + 1}"));
+        return choice;
+    }
 
     /// <summary>False skips the game's spell setter.</summary>
     public static bool BeforeSetSpell(CpuContext c, IMemory m)
@@ -425,17 +541,8 @@ public static class Shortcuts
         byte item = m.ReadU8(sp + FrameItems + row);
         if (m.ReadU8(sp + FrameSpells + row) != spell) item = None;   // not the frame expected: be safe
 
-        int choice;
-        try { choice = Picker.Run(c, m, spell, item); }
-        catch (Exception e)
-        {
-            Console.Error.WriteLine($"[KF2] shortcuts: the picker failed, the game's own Select is set -- {e}");
-            choice = 0;
-        }
+        int choice = Ask(c, m, HotkeyQuestion, spell, item, "hotkey");
         _decision = choice;
-        if (_probe)
-            Console.WriteLine($"[KF2] shortcuts: spell 0x{spell:X2} item 0x{item:X2} -> " +
-                              (choice < 0 ? "backed out" : choice == 0 ? "the game's Select" : $"shortcut {choice + 1}"));
         if (choice >= 1 && choice < Count)
             Set(choice, spell != None ? new Slot { Spell = spell, Item = None } : new Slot { Spell = None, Item = item });
         return choice == 0;
@@ -458,6 +565,8 @@ public static class Shortcuts
     {
         if (StoodDown) return;
         ClearSlots();
+        Hands.Reset();
+        _hotkey = 0;
         CardFiles.LastFile = "new game";
     }
 
@@ -465,6 +574,8 @@ public static class Shortcuts
     {
         if (StoodDown || c.RA != DeathReset) return;
         ClearSlots();
+        Hands.Reset();
+        _hotkey = 0;
         CardFiles.LastFile = "new game (died)";
     }
 
@@ -476,18 +587,98 @@ public static class Shortcuts
         var loaded = CardFiles.Read(_loadSlot);
         lock (Sync)
             for (int i = 0; i < Count; i++) _slots[i] = loaded[i];
+        var (right, left, hotkey) = CardFiles.ReadHands(_loadSlot);
+        Hands.Restore(right, left);
+        _hotkey = hotkey;
         if (_probe)
             Console.WriteLine($"[KF2] shortcuts: card slot {_loadSlot} loaded, shortcuts 2-5 " +
-                              string.Join(" ", loaded[1..].Select(x => $"{x.Spell:X2}/{x.Item:X2}")));
+                              string.Join(" ", loaded[1..].Select(x => $"{x.Spell:X2}/{x.Item:X2}")) +
+                              $"; {Hands.Describe(right, "weapon")}; {Hands.Describe(left, "spell")}; hotkey {hotkey + 1}");
     }
 
     public static void AfterCardSave(CpuContext c, IMemory m)
     {
         // Written while on, or while anything is assigned, so turning it off keeps a
         // player's shortcuts and a player who never used it gets no files.
-        if (StoodDown || !(Live || AnyAssigned())) return;
+        if (StoodDown || !(Live || AnyAssigned() || Hands.AnyAway())) return;
         Slot[] slots;
         lock (Sync) slots = (Slot[])_slots.Clone();
         CardFiles.Write(m, slots);
+        CardFiles.WriteHands(m, Hands.Right, Hands.Left, _hotkey);
+    }
+
+    // ---- the shell's "hands" verb: what the pad would do, without a pad ----
+
+    static int _shellPress = -1;
+    static volatile int _shellWeaponAway = -1, _shellSpellAway = -1;
+
+    /// <summary>Puts a weapon or spell in a hand's other slot for the shell, as the
+    /// weapon or magic page would.</summary>
+    static void TakeShellAway(IMemory m)
+    {
+        int w = Interlocked.Exchange(ref _shellWeaponAway, -1), s = Interlocked.Exchange(ref _shellSpellAway, -1);
+        var right = Hands.Right;
+        var left = Hands.Left;
+        if (w >= 0) Hands.AssignWeapon(m, 1 - right.Out, (byte)w);
+        if (s >= 0) Hands.AssignSpell(m, 1 - left.Out, (byte)s);
+    }
+
+    /// <summary><c>hands</c> the state; <c>hands weapon|spell|next|prev|use</c> a press at
+    /// the next control tick; <c>hands weapon:ID</c> / <c>spell:ID</c> fill the hand's
+    /// other slot (decimal). Fast queue.</summary>
+    static string Shell(string arg)
+    {
+        var m = RecompOne.Runtime.Runtime.Mem;
+        if (m == null) return "{\"ok\":false,\"error\":\"not running\"}";
+        arg = arg.Trim().ToLowerInvariant();
+        string? error = null;
+        if (arg.StartsWith("weapon:") || arg.StartsWith("spell:"))
+        {
+            bool weapon = arg[0] == 'w';
+            if (!int.TryParse(arg[(arg.IndexOf(':') + 1)..], out int id) || id < 0 || id > 0xFF) error = "an id 0-255";
+            else if (weapon) _shellWeaponAway = id;
+            else _shellSpellAway = id;
+            if (error == null) Interlocked.CompareExchange(ref _shellPress, 99, -1);
+        }
+        else
+        {
+            int press = arg switch
+            {
+                "" or "state" => -1,
+                "weapon" => (int)PadLayout.Press.SwapWeapon,
+                "spell" => (int)PadLayout.Press.SwapSpell,
+                "next" => (int)PadLayout.Press.NextHotkey,
+                "prev" => (int)PadLayout.Press.PreviousHotkey,
+                "use" => (int)PadLayout.Press.UseHotkey,
+                _ => -2,
+            };
+            if (press == -2) error = "hands [state|weapon|spell|next|prev|use|weapon:ID|spell:ID]";
+            else if (press >= 0) _shellPress = press;
+        }
+        if (error != null) return "{\"ok\":false,\"error\":\"" + error + "\"}";
+
+        var r = Hands.Right;
+        var l = Hands.Left;
+        return "{\"ok\":true,\"live\":" + (Live ? "true" : "false") +
+               ",\"weapon\":" + m.ReadU8(Hands.Weapon) + ",\"weaponOut\":" + (r.Out + 1) + ",\"weaponAway\":" + r.Away +
+               ",\"spell\":" + m.ReadU8(Hands.AttackSpell) + ",\"spellOut\":" + (l.Out + 1) + ",\"spellAway\":" + l.Away +
+               ",\"hotkey\":" + (_hotkey + 1) + ",\"holds\":" + HeldJson(m, _hotkey) +
+               ",\"select\":[" + m.ReadU8(SlotSpell) + "," + m.ReadU8(SlotItem) + "]" +
+               ",\"queued\":" + _shellPress + "}";
+    }
+
+    static string HeldJson(IMemory m, int row)
+    {
+        var (spell, item) = Labels.Held(m, row);
+        return "{\"spell\":" + spell + ",\"item\":" + item +
+               ",\"count\":" + (item == None ? 0 : m.ReadU8(Hands.Inventory + item)) + "}";
+    }
+
+    // ---- the HUD ----
+
+    public static void AfterHud(CpuContext c, IMemory m)
+    {
+        if (!Live || m.ReadU16(MaxHp) == 0) return;
+        HandsHud.Draw(c, m);
     }
 }

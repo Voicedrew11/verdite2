@@ -1242,9 +1242,10 @@ So:
   and base magic. They are what a level-up raises, they are what the save carries,
   and nothing recomputes them.
 - **`STR POWER`, `MAG POWER` and the seventeen ratings are derived**, rebuilt from
-  the equipment every time `func_800244CC` runs. Twelve sites call it: equip and
-  unequip (`func_80024B7C`, `func_80024C14`), item use (`func_80025FD0`,
-  `func_80026210`, `func_8002658C` twice), the level-up (`func_80024CAC`), the
+  the equipment every time `func_800244CC` runs. Twelve sites call it: two counters'
+  carries (`func_80024B7C`, `func_80024C14`; not equip and unequip, see "Equipping a
+  weapon or an attack spell, and an item's model"), item use (`func_80025FD0`,
+  `func_8002658C` twice), the weapon equip (`func_80026210`), the level-up (`func_80024CAC`), the
   post-load fixup (`func_800240B8`), the new-game setup (`func_800253F0`), the
   status screen's own opener (`func_800197D4`), and **four sites inside stage 3**.
 
@@ -2453,6 +2454,26 @@ target, or redraw with stage 13 as `LoopPacing` does. The text: a replacement pe
 (file, entry), drawn where quads 3-4 go. Nothing in the runtime draws a port
 texture into the GL frame; the map draws through ImGui over `OutputView`, which only
 blends by alpha, so a replacement there would be pre-composited.
+
+## Equipping a weapon or an attack spell, and an item's model
+
+Read 2026-11-11 for the Shortcuts hands (PATCHES_AND_MODS, "Shortcuts"); the weapon
+equip run outside the menu and measured, the rest read statically.
+
+| routine | what |
+|---|---|
+| `func_80026210(id)` | **the weapon equip**: `u8 0x801994AF = id`, the record `0x80199494 = 0x801B7FBC + id * 0x44`, the weapon's model read from disc into `*0x80199498` (`func_800183A0(5, id + 0x31, …)`) and set as model `0x20` (`func_800347EC`), the swing clock `0x801994A4 = -1`, then the stats (`func_800244CC`). Called by the weapon page `func_8001A6E8` (return `0x8001AA4C`), `func_800240B8` and the death reset `func_80025B4C`. Inventory counts are untouched: an equipped weapon stays in `0x8009B52C` |
+| `0x80025F70(id)` | **the attack spell setter**, one store, `u8 0x801994AB = id`. The signature merge named it `SsSetAutoKeyOffMode` (a 16-byte false match); the attack magic page `func_8001AB48` calls it from `0x8001AD68`, unless the pick was -1 |
+| `func_80024B7C`, `func_80024C14` | **not** equip and unequip: each bumps a counter (`0x80199434` / `0x80199436`) and, when it reaches 100, zeroes it and raises another (`0x80199438` / `0x8019943A`, held at 999), plays sound `0x1F` / `0x20` and rebuilds the stats. The docs' earlier "equip and unequip" was a guess from the stat rebuild |
+| `func_80022CAC(item)` | the preview's load: `func_80017F1C(6, item, 0)` the entry's size, `func_800177D0` a block of the model heap, `func_800183A0(6, item, dst)` the read, `func_8002E5E8(3, dst)` into bank 3 |
+| `func_8002E5E8(bank, tmd)` | `0x8018E18C[bank] = tmd`, the current model `0x8018E19C = tmd`, then `func_8002E314(tmd)`, which fixes the TMD's packets up in place once (texture coordinates and the like shifted by 3) |
+| `func_8002E1BC(i)` | object *i* of the current model: `cur + 0xC + i * 28` (a TMD object: vertex offset, count, ...); `func_8002E1F0(i)` points the vertex base `0x8018EAA0` at its vertices |
+
+So **an item's model is entry *id* of disc file 6, a plain TMD**, and any of them can be
+drawn without the heap or a bank: read it anywhere, fix it up once, and point
+`0x8018E19C` at it for the draw. The HUD builder draws its records exactly that way
+(the light record, the matrices, `func_8002E910` without perspective,
+`func_8002F214(0, 0)`), apart from the MO blend a static model does not need.
 
 ## The bow and the arbalest
 

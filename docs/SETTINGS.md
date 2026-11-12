@@ -100,7 +100,7 @@ HUD to OFF, pointing at row 1 moved it back, a click at (5,230) opened the quest
 | | MOUSE SENS | X0.25 … X5 | `kf2.mouse.turn` and `kf2.mouse.look`, as STICK SENS; dimmed only under `KF2_MOUSE=0` |
 | | GYRO | OFF, ON | `kf2.itemturn.gyro` and `kf2.gyroaim.on`: a held item (picked up or previewed) turns and a drawn bow aims with the pad's gyroscope (INPUT, "Turning a picked-up item", "Rumble and gyro aim with a drawn bow"); a pair set apart shows CUSTOM |
 | | RUMBLE | OFF, ON, HD | `kf2.rumble.on`, `kf2.rumble.hd`; OFF leaves the HD choice |
-| | SHORTCUTS | OFF, ON | `kf2.shortcuts.on`: five Select shortcuts on keys 1-5 or Select and the d-pad, each an item or a spell (PATCHES_AND_MODS, "Shortcuts"); on CONTROLS because GAMEPLAY is full at seven rows; keys and buttons in the Settings window; dimmed while the Shortcuts mod is enabled |
+| | SHORTCUTS | OFF, ON | `kf2.shortcuts.on`: Souls-style hands and hotkeys, the pad laid out for them (R1 swings, L1 casts, Square uses a hotkey, the d-pad swaps and cycles) (PATCHES_AND_MODS, "Shortcuts"); on CONTROLS because GAMEPLAY is full at seven rows; keys in the Settings window; dimmed while the Shortcuts mod is enabled |
 | SOUND | 3D AUDIO | ORIGINAL, SPEAKERS, HEADPHONES | `kf2.audio.positional` (AUDIO, "Positional audio") |
 
 The minimap has no saved key (N toggles it for the session). The map's pad button

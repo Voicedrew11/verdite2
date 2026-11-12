@@ -3987,44 +3987,97 @@ second slot with something equipped. Ships off until it is played.
 
 ## Shortcuts
 
-**Off by default; assigning and loading measured, using not tried.** The game's Select
-shortcut, five times over: any of the five holds an item, an attack spell or a support
-spell, used with one press through the game's own Select code, so MP, the gauge, item
-counts and "use it on what is in front of you" all hold. Shortcut 1 is the game's
-Select itself. Keys 1-5, or Select and the d-pad (Up, Down, Left, Right); a d-pad
-direction given to a shortcut stops walking and turning in the world, not in menus.
-Assigned from Equipment's Select row (HOTKEYS with keyboard labels): pick, answer Yes,
-then a second list asks which shortcut. Gameplay ▸ *Shortcuts*, with the mod's page under
-it (labels, a key and a pad button per shortcut, the d-pad); PORT SETTINGS ▸ CONTROLS ▸
-SHORTCUTS (GAMEPLAY is full at seven rows; the check refuses an eighth at start);
-`kf2.shortcuts.on`, `KF2_SHORTCUTS=0|1`, `KF2_SHORTCUTS_PROBE=1` a line for each
-assignment, shortcut fired and card load. Brought in from the Shortcuts mod
-(`kf2.shortcuts`) of PerdueEgg's verdite2-mods (https://github.com/PerdueEgg/verdite2-mods,
-`mods/shortcuts`, at `12df02b`), 2026-11-11, at the user's request; `patches/shortcuts/`
-(`Shortcuts.cs` the hooks, `Picker.cs` the which-shortcut list, `Labels.cs` the words,
-`CardFiles.cs` the files), entry `Shortcuts`. The logic is the mod's; `Shortcuts.cs`
-carries its reading of the shortcut page, the setters and player control.
+**Off by default; measured headless, not played on a pad, the HUD not judged.** Since
+2026-11-11, Souls-style hands and hotkeys (the user's design): the right hand holds two
+weapons, the left two attack spells, and five hotkeys hold an item or a spell each (the
+game's Select shortcut five times over, which is what the feature was brought in as).
+`patches/shortcuts/`: `Shortcuts.cs` the hooks, the latches and the hotkeys,
+`Hands.cs` the two hands, `PadLayout.cs` the pad, `HandsHud.cs` and `HandsIcons.cs`
+the HUD, `Picker.cs` the which-slot list, `Labels.cs` the words, `CardFiles.cs` the
+files. Gameplay ▸ *Shortcuts* (labels, a key per hotkey and per hand); PORT SETTINGS ▸
+CONTROLS ▸ SHORTCUTS; `kf2.shortcuts.on`, `KF2_SHORTCUTS=0|1`, `KF2_SHORTCUTS_PROBE=1` a
+line for each assignment, swap, hotkey used, icon read and card load; the shell's
+`hands` verb. The hotkey logic came from the Shortcuts mod (`kf2.shortcuts`) of
+PerdueEgg's verdite2-mods (https://github.com/PerdueEgg/verdite2-mods, `mods/shortcuts`,
+at `12df02b`); stands down while that mod is enabled.
 
-- **Words through the game's label routine.** Names are copied cell for cell from the
-  name slots, and the port's own words encoded through the `kf2.text` slot that
-  `Lettering` publishes (or the Text mod, enabled in its place), so the lettering, the
-  Retranslation's names and a `shortcuts:` string-table key apply.
-- **The files are the mod's**: `shortcuts_slotN.txt` beside the cards (the working
-  directory; gitignored for a dev run), written on a card save while it is on or anything
-  is assigned, read on every card load, cleared by a new game or a death without Seath's
-  Tear. A player's shortcuts from the mod carry over, and its keys too.
-- **The settings page reads no guest memory**: what each shortcut holds is copied on the
-  game thread at each control tick, and a Clear goes through the same lock.
-- Stands down while the mod is enabled.
+| pad, in the world | does |
+|---|---|
+| R1 (held) | the game's Square, held: swings the weapon out (a bow draws while it is held) |
+| L1 | the game's Triangle: casts the attack spell out |
+| Square | uses the current hotkey (the game's Select, the hotkey lent into its slot) |
+| d-pad Right / Left | swaps the right hand's weapon / the left hand's spell |
+| d-pad Down / Up | the next / previous hotkey that holds something |
+| L2, R2 | nothing |
+| the sticks | walk and strafe, turn and look (twin stick; 3D controls are set aside) |
 
-Measured 2026-11-11, slot 2 in fdat05, through `KF2_SHELL`: `9/9 hooked`; Equipment ▸
-the Select row ▸ the first entry ▸ Yes opened the which-shortcut list (5 rows, the menu
-pointer driving it), and a click on its second row logged `item 0x47 -> shortcut 2`
-and returned to Equipment; a `shortcuts_slot2.txt` of `-1,71` / `3,-1` loaded as
-`FF/47 03/FF FF/FF FF/FF` at autostart and on `load 2`. `scripts/fuzz.py --runs 12 --env
-KF2_SHORTCUTS=1`: 240,000 frames, no findings. **Not tried**: firing a shortcut (a key or
-pad button is polled from the host, which nothing headless presses), the d-pad takeover,
-a card save writing the file, a Japanese run, the picture of the list.
+Keyboard: unchanged (Space swings, Q casts, A/D strafe), plus 1-5 to use a hotkey, X to
+swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
+
+- **What a hand has out is the game's own equipment.** The weapon out is the weapon
+  byte `0x801994AF`, swapped through the game's own equip `func_80026210(id)` (the
+  byte, the record at `0x80199494`, the arm's model read from disc, the stats); the spell
+  out is the attack spell `0x801994AB`. The port keeps only the other slot of each hand
+  and which slot is out, so the swing, the cast, MP, the stats and the arm are the
+  game's. A weapon swap during a swing or a drawn bow (`s16 0x801994A4` not -1) waits
+  for it to end. A weapon put away and then sold or dropped (count 0 at `0x8009B52C`)
+  leaves its slot.
+- **Assigning.** After the game's Yes, the weapon page (`func_80026210` from
+  `0x8001AA4C`) asks WEAPON 1 / WEAPON 2 and the attack magic page (`0x80025F70` from
+  `0x8001AD68`) MAGIC 1 / MAGIC 2, in a list of the game's own kind (`Picker`, now
+  taking any rows). The slot that is out lets the game's setter run; the other slot is
+  kept here and the setter skipped; the one already out picked for the other slot moves
+  there; backing out changes nothing. The Select row asks which hotkey, as before;
+  hotkey 1 is the game's Select slot.
+- **The pad** (`PadLayout`). The physical pad's buttons are watched where the runtime
+  polls them (0112's `HostWindow.PadButtons`, chained after the Japanese ○/× swap, and
+  returned unchanged), and each new press of Square or a d-pad direction is counted.
+  The game's pad word `0x80199554` is rewritten in player control's pre-hook
+  (`func_8002957C`), which runs only in the world: the taken buttons' mask bits out,
+  R1 as Square, L1 as Triangle. Stage 3 copies that word into `0x80199556` before its
+  next read, so the edges stay the game's. Presses counted across a gap of more than
+  250 ms between control ticks (a menu, a message, a scene) are dropped.
+  `Analog.OneStick` is `Tank` unless the layout has the pad.
+- **The HUD** (`HandsHud`), after the HUD builder `func_80031D5C` while `u8 0x801994DD`
+  is 1: a Souls cross of three boxes at (6..94, 156..206), each the menu's nine window
+  templates (`0x80064C68`) drawn at 0.3 of their size, white and semi-transparent; the
+  left the magic hand, the right the weapon hand, below them the current hotkey. Each
+  hand's box has the slot out in its corner, small. Under the cross at y 208, the
+  hotkey's name and count, or for 2 s after a swap the name of what the hand took out.
+  Kept left of x 96 and so clear of the message strip at (96, 203); follows the HP
+  panel to the screen's edge when the HUD is anchored. All on ordering-table slot 1
+  (where the game's 2D HUD sprites go), text linked before the boxes so it draws over
+  them; `MenuDraw.Quad` is the new any-size quad.
+- **The icons are the items' own models** (`HandsIcons`). The game has no 2D icons; its
+  HUD is small models drawn without perspective, and so are these: the builder's steps
+  for one record (its light record, `RotMatrix`, `ScaleMatrix`, `func_8002E1F0`, the
+  orthographic `func_8002E910`, the lit `func_8002F214`), with the current model pointed
+  for the call at a TMD of the port's. Each is read with the preview's own routines
+  (`func_80017F1C(6, id, 0)` its size, `func_800183A0(6, id, dst)`, then the fix-up
+  `func_8002E314`) into a slot of `PrimBuffer.IconScratch` (`0x30000` bytes past the
+  card messages, three slots), at a control tick and only when the box's item changes;
+  scaled from its vertices' box to fit, turned about its middle at the preview's speed
+  on the clock, tipped toward the eye. A spell has no model and shows its name in
+  half-size letters instead (as does an item whose model would not read).
+- **Files.** `shortcuts_slotN.txt`, the mod's own format, for hotkeys 2-5;
+  `hands_slotN.txt`, one line `rightOut,rightAway,leftOut,leftAway,hotkey` (-1 none),
+  for the rest, beside it. Written on a card save while on or anything is kept, read on
+  every card load, cleared by a new game or a death without Seath's Tear.
+- **Gone**: a pad button per shortcut and the d-pad takeover (`kf2.shortcuts.padN`,
+  `kf2.shortcuts.dpad` are no longer read; the pad's layout is fixed).
+
+Measured 2026-11-11, slot 2 in fdat05, headless through `KF2_SHELL` with
+`KF2_SHORTCUTS=1 KF2_SHORTCUTS_PROBE=1`: `12/12 hooked`; the weapon out's model read
+(item 1, radius 480; item 0, 337); `hands weapon:0` then `hands weapon` equipped weapon 0
+in slot 2 and put weapon 1 away, and back again, the icon re-read each time;
+`hands spell:0`, `hands spell` set the attack spell to 0; with `-1,71` in
+`shortcuts_slot2.txt`, `hands next` made hotkey 2 current (item 71, its model read,
+radius 183) and `hands use` used one (count 2 to 1). Windowed with the HUD drawing,
+`KF2_FPS=144 KF2_FPS_PROBE=1`: 144.0 fps drawn at 15.0 ticks/s, `KF2_PRESENT_PROBE` wide
+288. **Not tried**: a physical pad (R1, L1, Square, the d-pad, the bow held on R1, the
+d-pad in menus), the assignment pickers on the weapon and magic pages, a card save
+writing `hands_slotN.txt`, a Japanese run. **Not judged**: the boxes, the icons (whether
+each item's texture page is in VRAM in play is unchecked), the small letters.
 
 ## NPC dialogue
 
