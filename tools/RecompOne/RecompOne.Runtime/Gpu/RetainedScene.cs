@@ -421,7 +421,12 @@ public static class RetainedScene
             ChunkCap[k] = Room(_count[k]);
             at += ChunkCap[k];
         }
-        if (_static.Length < at) _static = new Vertex[at];
+        // 0111: an array a kept map owns is never written over; the spare readied
+        // off the game thread is taken first, so the sort does not fault in new pages.
+        if (_staticOwned || _static.Length < at)
+            _static = Interlocked.Exchange(ref _spare, null) is { } spare && spare.Length >= at
+                ? spare : new Vertex[at];
+        _staticOwned = false;
         Array.Clear(_static, 0, at);
         Array.Copy(ChunkStart, _put, _put.Length);
         for (int i = 0, t = 0; i < n; i += 3, t++) Place(tris, i, _keys[t]);
@@ -431,7 +436,7 @@ public static class RetainedScene
         Array.Copy(ChunkFogQ, _chunkPlainQ, Chunks);
         Array.Copy(ChunkFogOf, _chunkPlainOf, Chunks);
         RecordFog();
-        StaticGeneration++;
+        StaticGeneration = ++_generations;
         StaticRevision++;
         _dirty.Clear();
         _dirtyBase = StaticRevision;
@@ -445,7 +450,8 @@ public static class RetainedScene
     /// <see cref="SetStatic"/> takes it.</summary>
     public static bool PatchStatic(ReadOnlySpan<Vertex> tris, ReadOnlySpan<bool> chunks)
     {
-        if (_staticCount == 0 || chunks.Length < Chunks) return false;
+        // 0111: a kept map's array is never written over; lay out whole into another.
+        if (_staticCount == 0 || _staticOwned || chunks.Length < Chunks) return false;
         int n = tris.Length / 3 * 3;
         Count(tris, n);
         for (int c = 0; c < Chunks; c++) _chunkDirty[c] = chunks[c];
@@ -479,7 +485,7 @@ public static class RetainedScene
         if (_dirty.Count > MostDirty)
         {
             _dirty.Clear();
-            StaticGeneration++;
+            StaticGeneration = ++_generations;
             _dirtyBase = StaticRevision;
         }
         return true;
@@ -630,6 +636,121 @@ public static class RetainedScene
         _dirty.Add((StaticRevision, start, count));
     }
 
+    // ---- 0111: static maps kept by key ---------------------------------------------
+
+    /// <summary>0111. How many built static maps are kept, by a key the port names,
+    /// so that putting one back (<see cref="RestoreStatic"/>) skips the sort, and the
+    /// backend keeps its buffers and skips the upload. 0, the default, keeps none.</summary>
+    public static int StaticKeep { get; set; }
+
+    sealed class KeptStatic
+    {
+        public ulong Key;
+        public int Generation, Count;
+        public long Used;
+        public Vertex[] Verts = [];
+        public object? Tag;
+        public int[] Start = [], CountOf = [], Cap = [], RangeStart = [], RangeCount = [];
+        public float[] Min = [], Max = [], BlendMin = [], BlendMax = [], PlainQ = [];
+        public bool[] UsedChunks = [];
+        public Vertex[] PlainOf = [];
+        public ulong[] RecordsOf = [];
+    }
+
+    static readonly List<KeptStatic> _kept = new();
+    static bool _staticOwned;
+    static Vertex[]? _spare;
+    static int _generations;
+    static long _keptClock;
+
+    /// <summary>0111. Static maps put back, and kept maps dropped for room.</summary>
+    public static long StaticRestores, StaticEvictions;
+
+    /// <summary>0111. Whether a generation is held by a kept map; the backend keeps its
+    /// buffers while it is.</summary>
+    public static bool IsKept(int generation)
+    {
+        foreach (var k in _kept) if (k.Generation == generation) return true;
+        return false;
+    }
+
+    /// <summary>0111. Keeps the static map just set under <paramref name="key"/>, with the
+    /// port's own state beside it, dropping the least recently used past
+    /// <see cref="StaticKeep"/>.</summary>
+    public static void KeepStatic(ulong key, object? tag = null)
+    {
+        if (StaticKeep <= 0) return;
+        _kept.RemoveAll(k => k.Key == key);
+        _kept.Add(new KeptStatic
+        {
+            Key = key, Generation = StaticGeneration, Count = _staticCount, Used = ++_keptClock,
+            Verts = _static, Tag = tag,
+            Start = (int[])ChunkStart.Clone(), CountOf = (int[])ChunkCount.Clone(), Cap = (int[])ChunkCap.Clone(),
+            RangeStart = (int[])StaticStart.Clone(), RangeCount = (int[])StaticCount.Clone(),
+            Min = (float[])ChunkMin.Clone(), Max = (float[])ChunkMax.Clone(),
+            BlendMin = (float[])ChunkBlendMin.Clone(), BlendMax = (float[])ChunkBlendMax.Clone(),
+            PlainQ = (float[])_chunkPlainQ.Clone(), PlainOf = (Vertex[])_chunkPlainOf.Clone(),
+            UsedChunks = (bool[])ChunkUsed.Clone(), RecordsOf = (ulong[])_chunkRecords.Clone(),
+        });
+        _staticOwned = true;
+        Vertex[]? freed = null;
+        while (_kept.Count > StaticKeep)
+        {
+            var old = _kept.MinBy(k => k.Used)!;
+            _kept.Remove(old);
+            if (!ReferenceEquals(old.Verts, _static)) freed = old.Verts;
+            StaticEvictions++;
+        }
+        ReadySpare(freed, _static.Length);
+    }
+
+    /// <summary>0111. Readies an array for the first static map of about this many
+    /// corners off the game thread, so its first sort does not fault in new pages.</summary>
+    public static void ReserveStatic(int corners) => ReadySpare(null, corners);
+
+    /// <summary>0111. The next map's array: a dropped map's, or a new one with its
+    /// pages written once on a pool thread.</summary>
+    static void ReadySpare(Vertex[]? freed, int length)
+    {
+        if (freed != null && freed.Length >= length) { Volatile.Write(ref _spare, freed); return; }
+        if (Volatile.Read(ref _spare) is { } s && s.Length >= length) return;
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            var a = new Vertex[length];
+            int step = Math.Max(1, 4096 / System.Runtime.CompilerServices.Unsafe.SizeOf<Vertex>());
+            for (int i = 0; i < a.Length; i += step) a[i].Flags = 0;
+            Volatile.Write(ref _spare, a);
+        });
+    }
+
+    /// <summary>0111. Puts back the static map kept under <paramref name="key"/>, at its
+    /// own generation, and hands back the port's state; false when none is kept.</summary>
+    public static bool RestoreStatic(ulong key, out object? tag)
+    {
+        tag = null;
+        var k = _kept.Find(e => e.Key == key);
+        if (k == null) return false;
+        k.Used = ++_keptClock;
+        _static = k.Verts;
+        _staticCount = k.Count;
+        _staticOwned = true;
+        k.Start.CopyTo(ChunkStart); k.CountOf.CopyTo(ChunkCount); k.Cap.CopyTo(ChunkCap);
+        k.RangeStart.CopyTo(StaticStart); k.RangeCount.CopyTo(StaticCount);
+        k.Min.CopyTo(ChunkMin); k.Max.CopyTo(ChunkMax);
+        k.BlendMin.CopyTo(ChunkBlendMin); k.BlendMax.CopyTo(ChunkBlendMax);
+        k.UsedChunks.CopyTo(ChunkUsed);
+        k.PlainQ.CopyTo(_chunkPlainQ); k.PlainOf.CopyTo(_chunkPlainOf); k.RecordsOf.CopyTo(_chunkRecords);
+        RecordFog();
+        StaticGeneration = k.Generation;
+        // 0124: a new revision with nothing dirty, so the backend takes the kept map whole.
+        StaticRevision++;
+        _dirty.Clear();
+        _dirtyBase = StaticRevision;
+        StaticRestores++;
+        tag = k.Tag;
+        return true;
+    }
+
     /// <summary>The quotient H*65536/z at and below which a corner's depth cue
     /// leaves nothing (the curves WorldVs fogs with), or 0 when it never does.</summary>
     public static float BlackQuotient(in Vertex v)
@@ -756,6 +877,9 @@ public static class RetainedScene
         public int ArmOrderCount;
         public int[] ArmRunKey = new int[64], ArmRunAt = new int[64];
         public int ArmRuns, ArmNext;
+        /// <summary>The projection the arm was drawn under, when it is not the frame's
+        /// (<see cref="SetArm"/>'s <c>h</c>); 0 for the frame's.</summary>
+        public float ArmH;
         /// <summary>0085. The sky: the objects of kind 0xF0, drawn from their meshes
         /// before the map, in painter's order (<see cref="AddSky"/>).</summary>
         public readonly List<ModelInstance> Sky = new();
@@ -1082,6 +1206,11 @@ public static class RetainedScene
         /// (gone), through the same ordered dither as <see cref="DistanceFade"/> and on top
         /// of it, in the colour pass and the normal pass alike.</summary>
         public float FadeOut;
+        /// <summary>0116. How far, in world units, this model may sink into the map and
+        /// still draw: tested against the map's depth pulled this much towards the
+        /// camera, against other models at its true depth. 0, the default, is none. The
+        /// main view only.</summary>
+        public float DepthPull;
     }
 
     /// <summary>0085. A mesh corner's <see cref="Vertex.Light"/>: the low 24 bits are its
@@ -1205,9 +1334,11 @@ public static class RetainedScene
     /// <paramref name="runAt"/>); the backend draws each run when the walk reaches the
     /// key's slot (0x1FFF less it, counted from the far end as <c>GteDepth.OtSlot</c>
     /// is), with no depth test, and leaves the far plane where it drew. <paramref name="box"/>
-    /// is the screen box it covers, in the GTE's pixels, as the packets' are.</summary>
+    /// is the screen box it covers, in the GTE's pixels, as the packets' are.
+    /// <paramref name="h"/> is the projection it was drawn under when the game sets its
+    /// own for it (King's Field's arm, H 2000 against the world's 200); 0 is the frame's.</summary>
     public static void SetArm(in ModelInstance m, ReadOnlySpan<int> order, ReadOnlySpan<int> runKey, ReadOnlySpan<int> runAt,
-                              ReadOnlySpan<float> box)
+                              ReadOnlySpan<float> box, float h = 0f)
     {
         ArmX0 = box[0]; ArmY0 = box[1]; ArmX1 = box[2]; ArmY1 = box[3];
         var f = Current;
@@ -1222,6 +1353,7 @@ public static class RetainedScene
         f.ArmNext = 0;
         f.Arm = m;
         f.Arm.MeshGen = MeshGeneration;
+        f.ArmH = h;
         f.HasArm = true;
         ArmSerial = _serial;
         ArmSlot = 0x1FFF - runKey[0];
@@ -1320,6 +1452,10 @@ public static class RetainedScene
     /// passes and the tolerance does not (<see cref="ModelUnderMap"/> is the last).</summary>
     public static readonly float[] MapSlacks = [8, 32, 128, 512, 0xF0 * 4];
     public static readonly long[] ModelUnderSlack = new long[5];
+    /// <summary>0116. Of the main view's instance samples the tolerance alone fails
+    /// against the map, those each instance's own <see cref="ModelInstance.DepthPull"/>
+    /// passes: what the allowance brings back.</summary>
+    public static long ModelUnderPulled;
 
     /// <summary>The tolerance probe: before each colour pass of the main view's map and
     /// models, the samples the tolerant test passes, and of those the ones it passes

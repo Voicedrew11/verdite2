@@ -465,6 +465,8 @@ public sealed class FunctionContext
     public HashSet<uint> Labels = [];
     public HashSet<uint> BackEdges = []; //fpr irq
     public bool Debug;
+    public bool Coverage;
+    public int CoverageIndex;
     public bool AddressComments;
     public bool DisasmComments;
     public Dictionary<uint, JumpTable> JumpTablesByJr = [];

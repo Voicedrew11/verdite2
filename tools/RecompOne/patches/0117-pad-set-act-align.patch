@@ -1,0 +1,24 @@
+diff --git a/RecompOne.Runtime/sdk/LibPad.cs b/RecompOne.Runtime/sdk/LibPad.cs
+index aa14770..587823e 100644
+--- a/RecompOne.Runtime/sdk/LibPad.cs
++++ b/RecompOne.Runtime/sdk/LibPad.cs
+@@ -97,15 +97,16 @@ public static class LibPad
+             return;
+         }
+ 
++        //0117. PadSetActAlign(port, data) has two arguments and data is always six
++        //bytes; A2 is whatever the caller left there.
+         var ptr = c.A1;
+-        var len = c.A2;
+-        if (ptr == 0 || len < 2)
++        if (ptr == 0)
+         {
+             c.V0 = 0;
+             return;
+         }
+ 
+-        for (var i = 0; i < (int)len && i < 6; i++)
++        for (var i = 0; i < 6; i++)
+         {
+             var v = m.ReadU8(ptr + (uint)i);
+             if (v == 0x00) _smallMotorIdx = i;

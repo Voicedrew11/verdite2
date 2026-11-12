@@ -1155,7 +1155,7 @@ public sealed partial class GlCore : IGpuBackend
         return entry;
     }
 
-    static bool FluidOverlap(int tpage, int u0, int v0, int w, int h)
+    internal static bool FluidOverlap(int tpage, int u0, int v0, int w, int h)
     {
         if (GteDepth.FluidN == 0) return false;
         int mode = (tpage >> 7) & 3;

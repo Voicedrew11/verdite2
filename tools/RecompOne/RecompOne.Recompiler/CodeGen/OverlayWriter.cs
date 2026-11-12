@@ -264,6 +264,24 @@ public static class OverlayWriter
         var conflictCount = allFuncs.Count - knownFuncs.Count;
         Console.WriteLine($"[Recompiler] total functions: {allFuncs.Count}");
 
+        //0113. Coverage indices, assigned here in emission order (overlay, class, then address) so they are
+        // deterministic and unique across all overlays; stubs and patches have no body to mark.
+        Dictionary<MipsFunction, int>? coverage = null;
+        if (config.Coverage)
+        {
+            coverage = new Dictionary<MipsFunction, int>(ReferenceEqualityComparer.Instance);
+            foreach (var result in overlayResults)
+            foreach (var part in overlayParts[result.Name])
+            foreach (var func in part.Functions)
+            {
+                if (func.IsStub || func.IsPatch) continue;
+                if (coverage.Count >= RecompOne.Runtime.Diagnostics.Coverage.Capacity)
+                    throw new InvalidOperationException(
+                        $"[recompiler] coverage: more than {RecompOne.Runtime.Diagnostics.Coverage.Capacity} functions; raise Coverage.Capacity");
+                coverage[func] = coverage.Count;
+            }
+        }
+
         string? mainCall = null;
         if (config.Main != null)
         {
@@ -281,7 +299,17 @@ public static class OverlayWriter
             EmitOverlayFile(result.Name, overlayParts[result.Name], knownFuncs, config.Debug,
                 config.AddressComments, config.DisasmComments, result.LbaStart, result.Base, result.Size,
                 result.Instructions, outDir,
-                SymbolRelocator.Plan(result.Functions, config.Relocations, result.Name));
+                SymbolRelocator.Plan(result.Functions, config.Relocations, result.Name), coverage);
+        }
+
+        if (coverage != null)
+        {
+            var tsv = new StringBuilder();
+            tsv.Append("index\toverlay\taddress\tname\n");
+            foreach (var (func, index) in coverage.OrderBy(kv => kv.Value).Select(kv => (kv.Key, kv.Value)))
+                tsv.Append($"{index}\t{func.OverlayName}\t0x{func.Start:X8}\t{func.EmittedName}\n");
+            File.WriteAllText(Path.Combine(outDir, "coverage.tsv"), tsv.ToString());
+            Console.WriteLine($"[Recompiler] coverage: {coverage.Count} indexed functions, coverage.tsv written");
         }
 
         Console.WriteLine("[Recompiler] Emitting Entry.cs");
@@ -331,7 +359,7 @@ public static class OverlayWriter
     private static void EmitOverlayFile(string overlayName, List<OverlayPart> parts,
         Dictionary<uint, string> knownFuncs, bool debug, bool addressComments,
         bool disasmComments, int lbaStart, uint ovlBase, uint ovlSize, MipsInstruction[] instrs, string outDir,
-        Dictionary<uint, uint> relocations)
+        Dictionary<uint, uint> relocations, Dictionary<MipsFunction, int>? coverage)
     {
         var funcs = parts.SelectMany(p => p.Functions).ToList();
         var partClass = new Dictionary<uint, string>();
@@ -363,6 +391,8 @@ public static class OverlayWriter
                     Labels = labels,
                     BackEdges = backEdges,
                     Debug = debug,
+                    Coverage = coverage != null && coverage.ContainsKey(func),
+                    CoverageIndex = coverage != null && coverage.TryGetValue(func, out var coverageIndex) ? coverageIndex : 0,
                     AddressComments = addressComments,
                     DisasmComments = disasmComments,
                     JumpTablesByJr = func.JumpTables.ToDictionary(j => j.JrVram),

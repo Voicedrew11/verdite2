@@ -635,6 +635,10 @@ internal static class GlShaders
             // driver gave every edge pixel a wrong normal, and the occlusion
             // pass drew a dark line along every edge.
             vec2 dUvx = dFdx(vUv), dUvy = dFdy(vUv);
+            // The truncation's direction, as in PrimFs.
+            // W is a view depth of tens of units or more, or 1 with none recovered.
+            bool affine = gl_FragCoord.w > 0.999;
+            bool negU = affine && dUvx.x < 0.0, negV = affine && dUvy.y < 0.0;
             vec3 p = vec3((gl_FragCoord.xy / uScale - uCentre) * (z / uProjH), z);
             vec3 dpx = dFdx(p), dpy = dFdy(p);
             // 0089. A pixel the colour pass dithers away by distance is no surface.
@@ -671,8 +675,8 @@ internal static class GlShaders
             // the see-through panel under it, and the present shaded that box as
             // no veil: a faint square round each letter, plainest in motion.
             if ((vTex & 0x80000000u) != 0u) {
-                ivec2 tc = ivec2(dUvx.x < 0.0 ? int(ceil(vUv.x - 0.0001)) : int(floor(vUv.x + 0.0001)),
-                                 dUvy.y < 0.0 ? int(ceil(vUv.y - 0.0001)) : int(floor(vUv.y + 0.0001)));
+                ivec2 tc = ivec2(negU ? int(ceil(vUv.x - 0.0001)) : int(floor(vUv.x + 0.0001)),
+                                 negV ? int(ceil(vUv.y - 0.0001)) : int(floor(vUv.y + 0.0001)));
                 vec4 t = veilTexel(tc);
                 if (t.rgb == vec3(0.0) && t.a < 0.5) discard;
             }
@@ -2095,6 +2099,9 @@ internal static class GlShaders
         // RetainedScene.DepthCapPixels over H: the main view's ceiling on the slope term,
         // per unit of depth. 0 is none.
         uniform float uDepthCapZ;
+        // 0116. The drawing instance's own allowance (ModelInstance.DepthPull / 65536),
+        // added past the caps: it is no slope term.
+        uniform float uDepthPull;
         uniform int   uScale;
         uniform vec2  uPosBias;
         uniform float uAniso;
@@ -2327,32 +2334,32 @@ internal static class GlShaders
         // 0060. One level of the decoded texture, bilinear, at a level-0 texel
         // position inside the rectangle. Held half a level texel in from the edge,
         // so the bilinear taps never leave the block.
-        vec4 mipAt(vec2 local, float level, vec2 ext, vec2 block) {
+        vec4 mipAt(vec2 local, float level, vec2 rLo, vec2 rHi, vec2 block) {
             float sz = exp2(level);
-            vec2 lo = vec2(0.5 * sz);
-            vec2 p = clamp(local, lo, max(ext - lo, lo));
+            vec2 lo = rLo + vec2(0.5 * sz);
+            vec2 p = clamp(local, lo, max(rHi - vec2(0.5 * sz), lo));
             return textureLod(uMip, (block + p) / 2048.0, level);
         }
 
         // n taps across the whole long axis, each trilinear at lod, premultiplied by
         // solidity. Level 0 is the exact texel, so the filter meets the console's
         // point sample where the footprint shrinks to one texel.
-        vec4 mipFootprint(vec2 axis, float n, float lod, ivec2 rMin, ivec2 rMax, vec2 block, bool negU, bool negV) {
-            vec2 ext = vec2(rMax - rMin + 1);
+        vec4 mipFootprint(vec2 axis, float n, float lod, ivec2 rMin, ivec2 rMax, ivec2 origin, vec2 block, bool negU, bool negV) {
+            vec2 rLo = vec2(rMin - origin), rHi = vec2(rMax - origin + 1);
             float k0 = floor(lod), f = lod - k0;
             vec4 acc = vec4(0.0);
             for (int i = 0; i < 16; ++i) {
                 if (float(i) >= n) break;
                 vec2 t = vUV + axis * ((float(i) + 0.5) / n - 0.5);
-                vec2 local = t - vec2(rMin);
+                vec2 local = t - vec2(origin);
                 vec4 a;
                 if (k0 < 0.5) {
                     vec4 c = decode(clamp(truncUV(t, negU, negV), rMin, rMax));
                     a = (c.rgb == vec3(0.0) && c.a < 0.5) ? vec4(0.0) : vec4(c.rgb, 1.0);
                 } else {
-                    a = mipAt(local, k0, ext, block);
+                    a = mipAt(local, k0, rLo, rHi, block);
                 }
-                vec4 b = f > 0.0 ? mipAt(local, k0 + 1.0, ext, block) : a;
+                vec4 b = f > 0.0 ? mipAt(local, k0 + 1.0, rLo, rHi, block) : a;
                 acc += mix(a, b, f);
             }
             return acc / n;
@@ -2407,6 +2414,13 @@ internal static class GlShaders
         // Set at the top of main, before any discard (see there).
         vec3 gLightN;
         vec2 gUVdx, gUVdy, gWx, gWy;
+        // The truncation's direction. An affine primitive (W of 1 at every corner)
+        // takes the console's, from its UV gradient, constant across it. A
+        // perspective-correct one truncates down: its gradient turns over inside
+        // a triangle (dV/dy on a floor at the screen's centre, a seam there), and
+        // a per-triangle sign flips as the view moves (a triangle the near plane
+        // clips, or one crossing the centre), shifting its texture by a texel.
+        bool gNegU, gNegV;
 
         vec3 authored(float spec, float rough, out vec3 hi) {
             hi = vec3(0.0);
@@ -2610,6 +2624,9 @@ internal static class GlShaders
             // helper pixels may discard (a clip plane, a dither, a mask). Mesa
             // answered anyway; a Windows driver did not, along every edge.
             gUVdx = dFdx(vUV); gUVdy = dFdy(vUV);
+            // W is a view depth of tens of units or more, or 1 with none recovered.
+            bool affine = gl_FragCoord.w > 0.999;
+            gNegU = affine && gUVdx.x < 0.0; gNegV = affine && gUVdy.y < 0.0;
             {
                 float lz = vDepth * 65536.0;
                 vec3 lp = vec3((gl_FragCoord.xy / float(uScale) - uLightCentre) * (lz / uLightH), lz);
@@ -2624,7 +2641,7 @@ internal static class GlShaders
             // unit or two of world, which at depth z moves the depth by at most a few
             // game pixels' width there (z / H each), so the term stops at that.
             if (uDepthCapZ > 0.0) dz = min(dz, uDepthBias + vDepth * uDepthCapZ);
-            dz = min(dz, uDepthCap);
+            dz = min(dz, uDepthCap) + uDepthPull;
             gl_FragDepth = vDepth > 0.0 ? max(vDepth - dz, 0.0) : 1.0;
             if (uFarPlane != 0) gl_FragDepth = 1.0;
             if ((uClipOn != 0 || uRadialFog != 0) && vDepth > 0.0) {
@@ -2668,8 +2685,8 @@ internal static class GlShaders
                     if (a < 0.5 || uOpaqueDepth == 1 && a < 0.95) discard;
                     return;
                 }
-                int du = ddx.x < 0.0 ? int(ceil(vUV.x - 0.0001)) : int(floor(vUV.x + 0.0001));
-                int dv = ddy.y < 0.0 ? int(ceil(vUV.y - 0.0001)) : int(floor(vUV.y + 0.0001));
+                int du = gNegU ? int(ceil(vUV.x - 0.0001)) : int(floor(vUV.x + 0.0001));
+                int dv = gNegV ? int(ceil(vUV.y - 0.0001)) : int(floor(vUV.y + 0.0001));
                 vec4 dt = decodeFluid(waveWrap(ivec2(du, dv)));
                 if (vRepClut != 0 && texMode != 2) {
                     if (dt.a < 0.5 || uOpaqueDepth == 1 && dt.a < 0.95) discard;
@@ -2759,8 +2776,8 @@ internal static class GlShaders
                 } else gWave = ivec4(0);
             }
 
-            int rawU = dUVdx.x < 0.0 ? int(ceil(uv.x - 0.0001)) : int(floor(uv.x + 0.0001));
-            int rawV = dUVdy.y < 0.0 ? int(ceil(uv.y - 0.0001)) : int(floor(uv.y + 0.0001));
+            int rawU = gNegU ? int(ceil(uv.x - 0.0001)) : int(floor(uv.x + 0.0001));
+            int rawV = gNegV ? int(ceil(uv.y - 0.0001)) : int(floor(uv.y + 0.0001));
 
             if (texMode == 6) {
                 vec2 win = vec2(uTexWindow.xy) + 1.0;
@@ -2805,12 +2822,25 @@ internal static class GlShaders
                 // `major > 0.0` is false for the NaN a degenerate triangle hands dFdx.
                 if (major > 0.0 && uMipOn > 0.5 && vRepClut == 0 && (vTex.y & 0x40000000u) != 0u) {
                     float n = clamp(ceil(major / max(minor, 1e-4)), 1.0, max(uAniso, 1.0));
-                    float maxLod = float((vTex.y >> 16) & 15u);
+                    int log2Size = int((vTex.y >> 16) & 15u);
+                    float maxLod = float(log2Size);
+                    ivec2 origin = rMin;
+                    // A shared square: aligned to its size, so it starts where the
+                    // rectangle's corner rounds down to; no coarser than the rectangle's own block.
+                    if ((vTex.y & 0x20000000u) != 0u) {
+                        ivec2 r0 = ivec2(int(vTex.x & 255u), int((vTex.x >> 8) & 255u));
+                        ivec2 r1 = ivec2(int((vTex.x >> 16) & 255u), int(vTex.x >> 24));
+                        origin = (r0 >> log2Size) << log2Size;
+                        int ext = max(r1.x - r0.x, r1.y - r0.y);
+                        int own = 3;
+                        while (own < log2Size && (1 << own) <= ext) own++;
+                        maxLod = float(own);
+                    }
                     float lod = min(log2(max(major / n, minor)), maxLod); // domain-ok: major > 0 is tested and n >= 1
                     if (lod > 0.0) {
-                        vec4 acc = mipFootprint(axis, n, lod, rMin, rMax,
+                        vec4 acc = mipFootprint(axis, n, lod, rMin, rMax, origin,
                             vec2(float(vTex.y & 255u), float((vTex.y >> 8) & 255u)) * 8.0,
-                            dUVdx.x < 0.0, dUVdy.y < 0.0);
+                            gNegU, gNegV);
                         if (acc.a > 0.0) texel = vec4(acc.rgb / acc.a, texel.a);
                         done = true;
                     }
@@ -2826,7 +2856,7 @@ internal static class GlShaders
                         for (int i = 0; i < 16; ++i) {
                             if (i >= taps) break;
                             vec2 t = uv + stride * (float(i) + 0.5 - 0.5 * float(taps));
-                            vec4 c = decodeFluid(waveWrap(clamp(truncUV(t, dUVdx.x < 0.0, dUVdy.y < 0.0), rMin, rMax)));
+                            vec4 c = decodeFluid(waveWrap(clamp(truncUV(t, gNegU, gNegV), rMin, rMax)));
                             // A transparent texel is black: weigh it out.
                             float w = (c.rgb == vec3(0.0) && c.a < 0.5) ? 0.0 : 1.0;
                             sum += c.rgb * w;
