@@ -86,6 +86,11 @@ public static class ConfigManager
         foreach (var p in panels)
             View.Panels[p.Name] = new PanelState { Open = p.IsOpen };
 
+        //0112. Headless there is no ImGui context, and asking it for its ini is a
+        //native fault. The file is left as it is rather than written without the
+        //layout half.
+        if (ImGui.GetCurrentContext() == IntPtr.Zero) return;
+
         var imguiIni = ImGui.SaveIniSettingsToMemory();
         var sb = new StringBuilder();
         sb.AppendLine("[RecompOne]");

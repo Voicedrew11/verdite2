@@ -210,6 +210,8 @@ public static class LibEtc
             Event.Dispatch(e);
         }
 
+        LibPad.OnVBlank(m);
+
         //The PSY-Q vblank callback (IRQ 0) belongs to the vblank too, not to the
         //VSync call -- the game's own frame counter hangs off it.
         Runtime.DispatchIrq(0);

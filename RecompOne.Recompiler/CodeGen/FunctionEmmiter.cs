@@ -63,6 +63,10 @@ public static class FunctionEmitter
         sb.AppendLine(noInline);
 
         var body = new StringBuilder();
+        //0113. One byte per function, for a fuzzer's coverage.
+        if (ctx.Coverage)
+            body.AppendLine(
+                $"        if (RecompOne.Runtime.Diagnostics.Coverage.On) RecompOne.Runtime.Diagnostics.Coverage.Hits[{ctx.CoverageIndex}] = 1;");
         if (ctx.Debug)
             body.AppendLine(
                 $"        System.Console.WriteLine(\"{func.EmittedName} @ {func.OverlayName} @ 0x{func.Start:X8}\");");

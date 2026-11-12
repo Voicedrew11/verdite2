@@ -142,6 +142,14 @@ public static class HostWindow
         Pgxp.Pgxp.Load();
         Interp.Interp.Load();
 
+        //0112.
+        if (Runtime.Headless)
+        {
+            Console.WriteLine("[Host] headless: no window, no gl context");
+            _headless = true;
+            return;
+        }
+
         foreach (var api in ApiChain())
             try
             {

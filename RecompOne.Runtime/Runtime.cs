@@ -26,6 +26,11 @@ public static class Runtime
 
     public static RunMode Mode { get; private set; } = RunMode.Retail;
 
+    //0112. No window, no GL context and no audio device, asked for rather than
+    //fallen into: the host set it before Initialize, for runs nobody watches
+    //(a fuzzer's). The game, the software GPU and the SPU still run.
+    public static bool Headless;
+
     public static void SetMode(RunMode mode)
     {
         Mode = mode;

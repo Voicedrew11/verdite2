@@ -17,7 +17,10 @@ namespace RecompOne.Runtime.Hle;
 /// edge, so a bilinear tap at the edge reads the edge.
 ///
 /// An entry is keyed on the page, the mode, the CLUT and the texel rectangle, and is
-/// decoded again when <c>VramTracker</c> says the texels or the CLUT changed. Decodes
+/// decoded again when <c>VramTracker</c> says the texels or the CLUT changed. Under
+/// <see cref="GteDepth.MipShare"/> it is keyed on the smallest square of the page,
+/// aligned to its size, that holds the rectangle, so rectangles inside one square
+/// share it; the flags' bit 29 tells the shader to find the square from the rectangle. Decodes
 /// are queued as polygons ask and run at the start of the batch that draws them, so a
 /// decode sees VRAM as those polygons did: anything that changes VRAM flushes first.
 /// </summary>
@@ -58,6 +61,11 @@ sealed class GlTexCache
 
     // Buddy allocator: free blocks per size, keyed by block index at that size.
     readonly HashSet<int>[] _free = new HashSet<int>[AtlasLog + 1];
+
+    // The smallest block refused in frame _fullFrame with nothing left to evict: a block
+    // as large fails too until a frame passes or a decode leaves the queue.
+    long _fullFrame = -1;
+    int _fullLog;
 
     public GlTexCache(GL gl) => _gl = gl;
 
@@ -124,11 +132,12 @@ sealed class GlTexCache
         _queue.Clear();
         for (int i = 0; i <= AtlasLog; i++) _free[i] = [];
         _free[AtlasLog].Add(0);
+        _fullFrame = -1;
         GteDepth.MipEntries = 0;
     }
 
     /// <summary>The atlas entry for a texture, as the flags the prim shader reads
-    /// (block x/8, y/8, log2 size, bit 30), or 0 when there is none.
+    /// (block x/8, y/8, log2 size, bit 30, bit 29 when shared), or 0 when there is none.
     /// <paramref name="tpage"/> and <paramref name="clut"/> are the primitive's.</summary>
     public uint Lookup(int tpage, int clut, uint rect, long frame)
     {
@@ -139,8 +148,23 @@ sealed class GlTexCache
         int w = u1 - u0 + 1, h = v1 - v0 + 1;
         if (w <= 0 || h <= 0) return 0;
 
+        uint shared = 0;
+        if (GteDepth.MipShare)
+        {
+            int l = MinLog;
+            while ((u0 >> l) != (u1 >> l) || (v0 >> l) != (v1 >> l)) l++;
+            int su = u0 >> l << l, sv = v0 >> l << l;
+            // A square reaching into a scrolling texture would be decoded again each scroll.
+            if (!GlCore.FluidOverlap(tpage, su, sv, 1 << l, 1 << l))
+            {
+                u0 = su; v0 = sv; w = h = 1 << l;
+                rect = (uint)su | (uint)sv << 8 | (uint)(su + w - 1) << 16 | (uint)(sv + h - 1) << 24;
+                shared = 0x20000000u;
+            }
+        }
+
         ulong key = rect | (ulong)(tpage & 0x1F) << 32 | (ulong)mode << 37
-                  | (mode == 2 ? 0ul : (ulong)(clut & 0x7FFF) << 40);
+                  | (mode == 2 ? 0ul : (ulong)(clut & 0x7FFF) << 40) | (ulong)shared << 34;
         if (!_entries.TryGetValue(key, out var e))
         {
             int log = MinLog;
@@ -169,7 +193,7 @@ sealed class GlTexCache
                 if (!e.Queued) { e.Queued = true; _queue.Add(e); }
             }
         }
-        return (uint)(e.X >> 3) | (uint)(e.Y >> 3) << 8 | (uint)e.Log << 16 | 0x40000000u;
+        return (uint)(e.X >> 3) | (uint)(e.Y >> 3) << 8 | (uint)e.Log << 16 | 0x40000000u | shared;
     }
 
     static int VramGen(Entry e)
@@ -234,6 +258,7 @@ sealed class GlTexCache
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         _gl.BindVertexArray(0);
         foreach (var e in _queue) e.Queued = false;
+        _fullFrame = -1;
         GteDepth.MipDecodes += n;
         _queue.Clear();
     }
@@ -293,6 +318,7 @@ sealed class GlTexCache
 
     bool Allocate(int log, long frame, out int x, out int y)
     {
+        if (frame == _fullFrame && log >= _fullLog) { x = y = 0; return false; }
         if (TryAllocate(log, out x, out y)) return true;
         // Evict what no frame since the last one has drawn, oldest first. The current
         // and previous frame's entries may still be in a batch not yet drawn.
@@ -308,6 +334,8 @@ sealed class GlTexCache
             if (TryAllocate(log, out x, out y)) { GteDepth.MipEntries = _entries.Count; return true; }
         }
         GteDepth.MipEntries = _entries.Count;
+        _fullLog = frame == _fullFrame ? Math.Min(_fullLog, log) : log;
+        _fullFrame = frame;
         return false;
     }
 

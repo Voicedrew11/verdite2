@@ -123,6 +123,22 @@ Four files in the directory have no entry below:
   the two halves are reunited without following a register or a store. A miss is
   the old affine behaviour, which is what makes it safe on by default. See
   "Perspective correction" in `docs/RENDERING.md`.
+  Since amended (2026-10-22): a perspective-correct primitive truncates its texel
+  down (`floor`), whatever its gradient; an affine one (W of 1 at every corner, so
+  `gl_FragCoord.w` 1) takes `ceil` where its UV runs backwards, as before. The rule
+  had come from the sign of the perspective-correct UV's derivative, which on a floor
+  or ceiling, where V runs across the screen, turns over at the projection centre: a
+  one-texel seam fixed at the screen's centre column, seen in KF1, Verdite2 and
+  Verdite3. The first amendment took the sign from a `noperspective` copy of the UV
+  instead, constant across a triangle, but under a perspective-correct sample any
+  per-triangle choice that follows the view shifts the whole texture by a texel when
+  it flips, and it flips as the view moves: a triangle the near plane clips (the
+  retained scene's, whose affine gradient is then not the console's), or one crossing
+  the centre column. KF1's floors were reported shifting as the player stepped up to
+  them (not yet judged again with this rule). A rule
+  that does not depend on the view cannot do either, and the copy is gone. Only the
+  GL 3.3 programs (`PrimFs`, `NormalFs`) changed; the GLSL 120 backend still takes
+  the derivative's sign. The amendment is the second diff in the patch file.
 
 - `0010-subpixel-vertex-positions.patch` — the GTE projects to 16.16 and then keeps
   only the whole part, so a vertex drifting slowly holds still and then jumps a
@@ -817,6 +833,32 @@ Four files in the directory have no entry below:
   pixels inside the rectangle; this leaks 0. GL core only. **No recompile.** See
   "The taps still left the texture at its edge" and "Mipmaps where the texture is
   decoded" in `docs/RENDERING.md`.
+  Since amended: a full atlas refuses fast. With every entry drawn this frame or the
+  last, `Allocate` found nothing to evict, but each miss still listed, sorted and
+  walked every entry before it refused, and a view that overflows the atlas asks
+  again for each texture it could not place, every frame. A refusal now holds for
+  the frame at that block size and larger, until a decode leaves the queue or the
+  cache resets; the answers are the same, so nothing drawn moves. Measured in KF1
+  (2026-10-22, uncapped, render distance 30): 220,000-600,000 refusals a second,
+  271 entries, and `GlTexCache.Lookup` 83% of `DrawOTag`'s time in area 5; after,
+  394 -> 893 fps there and 292 -> 647 at area 1's door, and views that do not fill
+  the atlas unchanged.
+  Amended again: entries shared per aligned square, behind `GteDepth.MipShare` (off
+  unless the game sets it). An entry was keyed on the polygon's own texture
+  rectangle, and neighbouring polygons' rectangles overlap, so the atlas held the
+  same texels many times: in KF1 a full atlas of 124 entries spent 4.19M texels of
+  blocks on 1.51M of rectangles over 247K distinct texels, 63 of the 124 inside
+  another, and one frame refused 391 more wanting 17.8M; no atlas size fits that.
+  Under the switch an entry is the smallest square of the page, aligned to its size
+  (8-256), holding the rectangle, unless it reaches into a scrolling texture; flags
+  bit 29 marks it, and the shader finds the square's corner by rounding the
+  rectangle's down to that size, so nothing new is carried. Taps are still held
+  inside the rectangle, and the level is capped at the rectangle's own block, but a
+  coarse level now averages the page's texels past the rectangle's edge where the
+  block used to repeat its edge. Off, keys, flags and shader arithmetic are as
+  before. Measured in KF1 (2026-10-22, uncapped, render distance 30, areas 1, 3, 4
+  and 5): 365 entries at most, no refusals and no evictions, against 200,000-850,000
+  refusals a second without it; frame rates within 10% either way.
 
 - `0061-window-icon-sizes-and-app-id.patch` — two things one icon needs.
   `SetWindowIcon` was handed exactly one image, so a desktop asking for 32 or 48
@@ -1642,6 +1684,15 @@ Four files in the directory have no entry below:
   `UploadStatic` and draws through `WorldVs`) had drawn it; `UploadStatic` now gives
   them zeros as long as the map until then. Static reasoning from the trace; not
   reproduced on NVIDIA here. Not in the patch file.
+  Since amended (2026-10-16): the arm can be drawn under its own projection.
+  `RetainedScene.SetArm` takes an optional `h`, kept as `Frame.ArmH`, for a game that
+  sets one for the arm (King's Field's arm projects at H 2000 against the world's
+  200). `GlModelMeshes.DrawWorldArm` sets the world program's H, the depth cue's H
+  and the fog-from-depth H to it around the arm's draw (`ArmProjection`) and puts the
+  frame's back after; `DrawArmNormals` does the same for the normal pass's H and its
+  unprojection's. With `h` 0, which every existing caller passes, nothing changes, so
+  Verdite2 and Verdite3 draw as before. The seventeenth diff in the patch file. See
+  "The arm on the retained scene" in King's Field's `docs/GPU_RENDERER.md`.
 
 - `0086-retained-model-mask.patch` — the retained models (`0085`) are drawn at slot 1,
   ahead of every packet the walk sends after them, and `0051`'s tolerance (1 unit
@@ -2048,6 +2099,116 @@ Four files in the directory have no entry below:
   every 2 s from five seconds into the message; after, `wide 125, vram fallback 0`
   for the whole wait. The map item itself not reached by the shell; **not looked
   at.** **No recompile.**
+- `0111-kept-static-maps.patch` — a port that holds one static map at a time and
+  returns to maps it built before (King's Field's areas, an exit walked back
+  through, a death) rebuilt each one: the sort in `SetStatic`, then on the next
+  frame the vertex buffer's upload and the mip keys' index, about 90 ms for a
+  million corners. `RetainedScene.StaticKeep` (0, the default, keeps none) keeps
+  that many maps by a key the port names: `KeepStatic(key, tag)` after
+  `SetStatic`, `RestoreStatic(key, out tag)` to put one back at its own
+  generation. The GL backend parks a kept generation's VAO, buffers and mip-key
+  tables when another map replaces it, frees those no longer kept, and swaps them
+  back on a restore. An array a kept map owns is never written over; the next one
+  is a dropped map's, or readied with its pages written on a pool thread
+  (`ReserveStatic` for the first), since a first sort into new memory took 41 ms
+  against 16. Generations are now numbered from a counter, so a restored one is
+  never reissued. Measured in KF1 (`KF1_MAPCACHE`, five kept): a return restores
+  in 0.1 ms with no upload frame, against 35 ms and a 56-65 ms frame before; a
+  first visit 35 ms as before. With `StaticKeep` at 0 nothing is kept, parked or
+  readied, so Verdite2 and Verdite3 run the old path. **No recompile.**
+- `0112-headless-turbo.patch` — a run nobody watches. `Runtime.Headless` (the game
+  sets it, from `KF2_HEADLESS` or `KF1_HEADLESS`) takes `HostWindow` down the path
+  it already had for a failed GL start: no window, no context, `_headless` set.
+  `Audio` opens no device. `ConfigManager.SaveView` returns before asking ImGui
+  for its ini when there is no context, which was a native fault (a settings
+  migration saved the view at boot). `FrameClock` drops its ceiling while
+  `Interrupts.Turbo` is set, so turbo is no longer held to the target rate by the
+  present. `Gpu.NoRaster` skips the software rasterizer's pixels and nothing
+  before them; headless, that was half a frame. Measured in KF2: about 650 frames
+  a second for one run, 430-850 each with six at once, against 250 rasterizing.
+  Written in Verdite2's copy as a second `0111`; renumbered here, where `0111`
+  was already taken. Nothing changes unless a port sets `Headless` or `NoRaster`
+  (Turbo's ceiling aside, which only the menu's Turbo item sets). **No recompile.**
+- `0113-function-coverage.patch` — which recompiled functions a run reached, for
+  a fuzzer to know what it never tried. Under `"coverage": true` in the config,
+  the recompiler numbers every emitted function with a body (stubs and patches
+  have none) 0, 1, 2... across all overlays in emission order, opens each body
+  with `if (Coverage.On) Coverage.Hits[N] = 1;`, and writes `coverage.tsv`
+  (index, overlay, address, name) beside the generated files.
+  `RecompOne.Runtime.Diagnostics.Coverage` holds the 64 KiB of hit bytes and
+  `HitIndices()`. Measured in KF1 (1,590 functions): 431 frames a second per
+  fuzz run, six at once, against about 420 before. **Recompile to take it**;
+  without the flag the output is byte-for-byte what it was, so Verdite2 and
+  Verdite3 do not move.
+- `0114-soft-faults.patch` — a bad pointer as a report rather than the end of a
+  run. With `PSMemory.SoftFaults` set, an access `Resolve` cannot map (unmapped,
+  or crossing the scratchpad's end) calls `PSMemory.UnmappedAccess(address, size,
+  write)` and reads zeros from, or writes into, a per-thread scratch buffer,
+  where it used to throw. Only the two throw sites changed; the RAM, scratchpad
+  and register paths are untouched. Off by default (KF1's fuzzer turns it on), so
+  nothing changes for a port that does not set it. **No recompile.**
+- `0122-libpad-actuators.patch` — three faults in the newer pad library's vibration.
+  `PadInfoAct(port, -1, term)` asks how many actuators the pad has; the runtime
+  answered from `term` and said 1, where a DualShock has 2, and Shadow Tower then
+  aligned no large motor, so the runtime read the same byte for both motors and
+  every rumble played at 1/255. `PadSetAct` read the buffer once, when called, but
+  the real driver sends it every vblank and Shadow Tower calls it once at start-up
+  and then only writes the motor bytes: its rumble never reached the pad. And the
+  first `PadSetAct`, before `PadSetActAlign`, buzzed the small motor from the default
+  indices. Now `acno == -1` answers 2; the buffer is kept and read again on every
+  `Refresh` (vblank and frame), sent when it changes and every 250 ms while a motor
+  runs (SDL's rumble is given 500 ms); nothing is sent before `PadSetActAlign`; and
+  a change is logged on the `sdk` channel. Measured on Shadow Tower with vibration on:
+  the game's `func_80057A68(0x80)` sent large 192, and large 0 when its countdown ran
+  out. No King's Field port links this library, so **nothing changes for them. No
+  recompile.**
+- `0121-libpad-refresh-on-vblank.patch` — `LibPad` refreshed the game's pad buffers
+  only from `PresentFrame`. The hardware fills them from the vblank interrupt, and
+  Shadow Tower's card prompts spin on a pad latch without calling `VSync`, so with
+  `LibEtc.VBlankFromPoll` on they still froze. `LibEtc.TickVBlank` now calls
+  `LibPad.OnVBlank`, which pumps host input (at most every 4 ms) and refreshes the
+  buffers. It returns at once when the game has not called `PadInitDirect`, which is
+  every King's Field port, so **nothing changes for those. No recompile.**
+- `0120-libpad-pad-read-event.patch` — `LibPad.Refresh` now fires `PadReadEvent`, in
+  the same swapped layout as the BIOS pad paths, so a listener written for `PAD_dr`
+  also sees a game that links the newer pad library. **No recompile.** No effect
+  without a listener.
+- `0119-seek-from-sector-callback.patch` — the runtime stepped one sector on after
+  each sector callback, even when the callback had just issued a seek, so the new
+  read started one sector late. It now steps only if no `Setloc` happened during the
+  callback. Shadow Tower's disc queue seeks from its last-sector callback and failed
+  its own checksum forever. **No recompile.** Not tested on the King's Field ports.
+- `0118-cdread-drive-mode.patch` — `CdRead` set the drive to the caller's mode. The
+  real one sizes the copy by that mode but runs the drive with `CdlModeSize1`, and
+  the drive stays that way (`ori 0x20` in Shadow Tower's `CdRead`), which a game's
+  own ReadN after it relies on. Without it each sector arrived 12 bytes off. **No
+  recompile.** Not tested on the King's Field ports.
+- `0117-pad-set-act-align.patch` — `LibPad.PadSetActAlign` took a third argument,
+  a length, that the real call does not have: it is `PadSetActAlign(port, data)` and
+  `data` is always six bytes. With `a2` left at anything below 2 it returned 0, and
+  Shadow Tower retries until the call succeeds, so `ST.EXE` froze before its first
+  frame. It now reads six bytes. No King's Field port binds it, so nothing moves
+  for them.
+- `0116-model-depth-pull.patch` — a model placed a little into the floor or a wall
+  (a chest's base under a bump in the ground) drew whole under the ordering table,
+  whose map faces were linked 0xF0 slots behind their mean; the retained renderer's
+  per-pixel test cut it. `RetainedScene.ModelInstance.DepthPull` is a per-instance
+  allowance in view-depth units, 0 by default. In the main view (`_pullAllowed`),
+  when the Z-buffer and `0051`'s tolerance are on and an instance has one,
+  `DrawInstances` pulls both of its passes towards the camera by it (`uDepthPull`,
+  added to the fragment's tolerance after both caps): the depth pass sets stencil
+  bit 2 where an instance passes against the map, and afterwards
+  `RestoreTrueDepth` sets the depth under that bit to the far plane through the
+  instances' own coverage (`uFarPlane`) and draws their true depth into it, so
+  water, blended faces and packets drawn later test against where the models
+  really are. A model is pulled by the same amount over all its faces, so its own
+  faces still sort among themselves; two models within each other's allowances
+  sort by their pulled depths. The mask probe (`0086`) also counts
+  `ModelUnderPulled`, the samples the allowance passes that the tolerance alone
+  fails. The planar mirror, the normal pass and the captured posed models
+  (`DrawWorldModels`) are unchanged. Measured in Verdite3 (`KF3_OBJECT_PULL`, "Objects
+  sunk into the map" in its `docs/PICTURE.md`). **No recompile.** Nothing changes
+  for a game that leaves `DepthPull` at 0.
 
 ## Package bumps
 
@@ -2068,6 +2229,51 @@ travels with the fork.
   `Ultz.Native.GLFW` 3.4.0, and `IView.FocusChanged`, `ShouldSwapAutomatically`,
   `IMonitor.Bounds` and the lazy `VSync` in `DoRender` are unchanged. Verdite3 built
   clean and ran with no exception. **No recompile.**
+
+- `0090-no-system-cnf.patch` — a disc with no `SYSTEM.CNF` could not be recompiled:
+  `SystemCfg.Parse` read it unconditionally. With none, the BIOS boots `PSX.EXE`
+  with TCB 4, EVENT 16 and the stack at `0x801FFF00`, the class's own defaults, so
+  `Parse` now returns them; `DiscProbe.SystemCfgBoot` answers `PSX.EXE` the same
+  way, so `--autoconfigure` names the boot file rather than guessing the first
+  executable. King's Field (`SLPS-00017`, Verdite1) has no `SYSTEM.CNF`. A disc
+  with one reads it as before. **Forces a recompile** only for such a disc.
+
+- `0091-vblank-from-the-poll.patch` — on `0021`'s timeline the vblank is delivered
+  only from inside `LibEtc.VSync`, so a game that waits for its own vblank handler
+  without calling `VSync` waits forever: King's Field (`SLPS-00017`) spins in its
+  frame gate on a counter its `RCntCNT3` handler bumps, and drew four frames after
+  the first area loaded. `LibEtc.VBlankFromPoll` (off by default; the port sets it)
+  has `Interrupts.PollSlow` deliver the vblanks that are due on the same wall-clock
+  grid, inside the poll's register snapshot and exception stack, before draining
+  pending IRQs. `AdvanceVBlanks` marks itself running, and a poll that arrives from
+  inside a delivery (a handler is recompiled code, and polls too) does not deliver
+  again. With the switch off the only change is that mark, so a game that does not
+  set it runs as before. Measured in Verdite1: about 20 frames a second in the first
+  area, the gate's three vblanks a frame. **No recompile.**
+
+- `0092-wrapped-image-load.patch` — an image load (GP0 `A0`) that runs past VRAM's
+  right or bottom edge wraps on the console, and `StoreImageHalfword` wraps it into
+  the shadow, but `HleLoadFlush` handed the backend the whole rectangle, and every
+  GL backend's `WriteRect` is one `TexSubImage2D`, which refuses a rectangle past
+  the texture with `GL_INVALID_VALUE`: the backend received none of it. King's
+  Field (`SLPS-00017`) loads its HUD and menu palettes as 16x16 TIM CLUT blocks at
+  rows 497-500, so the backend's palettes read zero, every texel transparent, and
+  the HUD and every menu were drawn and invisible. A wrapping load now goes to the
+  backend as up to four pieces, each at its wrapped position; a load that fits is
+  passed as before, so a game that never wraps one is unchanged. Measured in
+  Verdite1: 35 palette words differed between the backend's VRAM and the shadow,
+  and 0 after, with all of VRAM outside the display buffers equal through the boot,
+  the first area and the in-game menu. Fills and VRAM copies that wrap are not
+  split. **No recompile.**
+
+- `0093-disc-image-decorator.patch` — `DiscImage.Decorate`, a
+  `Func<IDiscImage, string, IDiscImage>` that `DiscImage.Open` hands each image it
+  opens, with its path, and returns the result of. Null, the default, passes the
+  image through, so a game that does not set it is unchanged. The disc is opened
+  inside the generated `Entry.Run`, so a port had no other place to stand between
+  the image and the runtime's reads. King's Field (`SLPS-00017`) lays the English
+  fan translation's PPF over the sectors this way, leaving its executable's
+  records out. **No recompile.**
 
 ## Retained contract additions under verification (2026-10-04)
 

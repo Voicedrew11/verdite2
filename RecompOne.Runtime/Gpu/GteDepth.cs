@@ -632,6 +632,14 @@ public static class GteDepth
     /// </summary>
     public static bool Mipmaps;
 
+    /// <summary>
+    /// 0060. One atlas entry per aligned square of a texture page rather than per
+    /// polygon rectangle: neighbouring polygons' rectangles overlap, and keyed apart
+    /// they filled the atlas many times over with the same texels. A coarse level now
+    /// averages the page's texels past the rectangle's edge. Read at each lookup.
+    /// </summary>
+    public static bool MipShare;
+
     /// <summary>True once the GL backend has built the atlas and found <c>uMipOn</c>.</summary>
     public static bool MipmapsLive;
 

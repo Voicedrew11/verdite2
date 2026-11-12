@@ -267,12 +267,17 @@ public sealed partial class Gpu
             HleTri(v[0], v[1], v[2], tex, gouraud, semi, raw, clut);
             if (quad) HleTri(v[1], v[2], v[3], tex, gouraud, semi, raw, clut);
         }
-        else
+        else if (!NoRaster)
         {
             RasterTriangle(v[0], v[1], v[2], tex, gouraud, semi, raw, clut);
             if (quad) RasterTriangle(v[1], v[2], v[3], tex, gouraud, semi, raw, clut);
         }
     }
+
+    //0112. A run nobody watches can leave the software rasterizer's pixels
+    //unmade: everything up to them (the packet, the vertex map, the prim event)
+    //still happens, so the game sees the same GPU. Half a headless frame was here.
+    public static bool NoRaster;
     
     // 0052. The game culls on whole pixels (NCLIP > 0 on the first three corners); count
     // the polygons whose fractional corners wind the other way, and those with corners

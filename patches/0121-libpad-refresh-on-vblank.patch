@@ -1,0 +1,33 @@
+diff --git a/RecompOne.Runtime/sdk/LibPad.cs b/RecompOne.Runtime/sdk/LibPad.cs
+--- a/RecompOne.Runtime/sdk/LibPad.cs
++++ b/RecompOne.Runtime/sdk/LibPad.cs
+@@ -140,6 +140,17 @@
+         c.V0 = 1;
+     }
+ 
++    //0121. The hardware fills these buffers from the vblank interrupt, so a game can
++    //wait for a button in a loop that never calls VSync. Refresh from the vblank too.
++    private const double PadPumpIntervalMs = 4.0;
++
++    internal static void OnVBlank(IMemory m)
++    {
++        if (_buf1 == 0 && _buf2 == 0) return;
++        HostWindow.PumpInput(PadPumpIntervalMs);
++        Refresh(m);
++    }
++
+     public static void Refresh(IMemory m)
+     {
+         if (_buf1 != 0)
+diff --git a/RecompOne.Runtime/sdk/LibEtc.cs b/RecompOne.Runtime/sdk/LibEtc.cs
+--- a/RecompOne.Runtime/sdk/LibEtc.cs
++++ b/RecompOne.Runtime/sdk/LibEtc.cs
+@@ -210,6 +210,8 @@
+             Event.Dispatch(e);
+         }
+ 
++        LibPad.OnVBlank(m);
++
+         //The PSY-Q vblank callback (IRQ 0) belongs to the vblank too, not to the
+         //VSync call -- the game's own frame counter hangs off it.
+         Runtime.DispatchIrq(0);

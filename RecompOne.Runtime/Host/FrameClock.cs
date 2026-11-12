@@ -146,7 +146,9 @@ internal static class FrameClock
     {
         var now = Now;
 
-        var frameMs = CeilingMs;
+        //0112. Turbo already forces the vblank wait; the present's own ceiling
+        //would otherwise still hold it to the target rate.
+        var frameMs = Interrupts.Turbo ? 0.0 : CeilingMs;
         if (frameMs <= 0.0)
         {
             //Off. Keep the grid on the present, so that turning it back on does
