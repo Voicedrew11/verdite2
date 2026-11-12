@@ -470,6 +470,7 @@ internal static unsafe class InputManager
         if (_pad0 != null)
         {
             var bind = ConfigManager.Game.PadFor(0);
+            _stickOnly[0] = StickOnly(_pad0, bind);
             Controller.State &= PadButtonsOf(0, PadState(_pad0, bind, 0xFFFF));
             Controller.LeftX = Axis(_pad0, bind.LeftStickX);
             Controller.LeftY = Axis(_pad0, bind.LeftStickY);
@@ -480,6 +481,7 @@ internal static unsafe class InputManager
         if (_pad1 != null)
         {
             var bind = ConfigManager.Game.PadFor(1);
+            _stickOnly[1] = StickOnly(_pad1, bind);
             Controller.State2 &= PadButtonsOf(1, PadState(_pad1, bind, 0xFFFF));
             Controller.LeftX2 = Axis(_pad1, bind.LeftStickX);
             Controller.LeftY2 = Axis(_pad1, bind.LeftStickY);
@@ -710,6 +712,48 @@ internal static unsafe class InputManager
 
     private static ushort PadButtonsOf(int port, ushort buttons) =>
         PadButtons is { } rewrite ? rewrite(port, buttons) : buttons;
+
+    //0114. The buttons a pad holds this poll only through a stick binding (active
+    //high, Controller's layout): the stick pushed, with nothing else bound to that
+    //button held. Read inside PadButtons, so a layout of the game's can tell the
+    //d-pad from the stick its default bindings put on the same bits.
+    private static readonly ushort[] _stickOnly = new ushort[2];
+
+    public static ushort StickButtons(int port) => port is 0 or 1 ? _stickOnly[port] : (ushort)0;
+
+    private static ushort StickOnly(GameController* ctrl, GamepadBindings pad)
+    {
+        ushort s = 0;
+        s |= StickOnly(ctrl, pad.Cross, Controller.Cross);
+        s |= StickOnly(ctrl, pad.Circle, Controller.Circle);
+        s |= StickOnly(ctrl, pad.Square, Controller.Square);
+        s |= StickOnly(ctrl, pad.Triangle, Controller.Triangle);
+        s |= StickOnly(ctrl, pad.L1, Controller.L1);
+        s |= StickOnly(ctrl, pad.R1, Controller.R1);
+        s |= StickOnly(ctrl, pad.L2, Controller.L2);
+        s |= StickOnly(ctrl, pad.R2, Controller.R2);
+        s |= StickOnly(ctrl, pad.L3, Controller.L3);
+        s |= StickOnly(ctrl, pad.R3, Controller.R3);
+        s |= StickOnly(ctrl, pad.Start, Controller.Start);
+        s |= StickOnly(ctrl, pad.Select, Controller.Select);
+        s |= StickOnly(ctrl, pad.Up, Controller.Up);
+        s |= StickOnly(ctrl, pad.Down, Controller.Down);
+        s |= StickOnly(ctrl, pad.Left, Controller.Left);
+        s |= StickOnly(ctrl, pad.Right, Controller.Right);
+        return s;
+    }
+
+    private static ushort StickOnly(GameController* ctrl, int[] bindings, ushort bit)
+    {
+        bool stick = false;
+        foreach (var binding in bindings)
+        {
+            if (!Pressed(ctrl, binding)) continue;
+            if (!IsStickBinding(binding)) return 0;
+            stick = true;
+        }
+        return stick ? bit : (ushort)0;
+    }
 
     private static ushort PadState(GameController* ctrl, GamepadBindings pad, ushort s)
     {

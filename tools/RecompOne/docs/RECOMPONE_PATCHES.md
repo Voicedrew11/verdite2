@@ -2091,6 +2091,16 @@ Four files in the directory have no entry below:
   patch matching a whole layout; the picture hash identical to the build before at
   three spots; 144.0 fps drawn at 14.9-15.0 ticks/s, no GL error under `KF2_GLDEBUG=1`.
   **No recompile.**
+- `0114-stick-buttons.patch` — which of a pad's buttons only a stick holds.
+  The default bindings put the left stick's four directions on the d-pad's bits
+  (`Up = [11, 104]`, …), so the word `0112` hands the game cannot tell a d-pad press
+  from a push of the stick. `InputManager.PollGamepads` now records, before calling
+  `PadButtons`, the buttons each pad holds this poll only through a stick binding
+  (`StickOnly`: a stick binding pressed and no other binding of that button),
+  read as `HostWindow.PadStickButtons(port)` (active high, `Controller`'s layout,
+  valid inside `PadButtons`). The word itself is unchanged. KF2's Souls layout
+  (`Shortcuts`) counts d-pad presses without them, so pushing the stick no longer
+  swaps a hand or cycles a hotkey. **No recompile.**
 
 ## Package bumps
 
