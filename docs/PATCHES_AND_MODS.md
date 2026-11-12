@@ -4073,9 +4073,9 @@ swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
   rounded up, since the transform drops the fraction (the bottom fell at 227). The
   first version drew the menu's nine window pieces at 0.3 of their 33-texel size, which
   matched nothing and would shimmer at 240p, with a name line under the cross.
-  **The bevel is a pixel a side narrower than the panel's** (asked for after the first
-  look: the inside 2 pixels larger each way), 4.56 x 5.27; the opening measured
-  19 x 31 against 17 x 29, the outer edges unmoved. **Not lit per pixel**: per-pixel
+  **The bevel is two pixels a side narrower than the panel's** (asked for after the
+  first look: the inside two 240p pixels larger on each side), 3.56 x 4.30; the opening
+  measured 21 x 33 against 17 x 29, the outer edges unmoved. **Not lit per pixel**: per-pixel
   lighting and the packet depth leave the HUD alone through `PolyAssembler.InHud`, which
   `PerPixelLighting` raises only inside the builder, so the cross (drawn in a post-hook,
   after that flag's post had lowered it) was lit per pixel, cards and models both
