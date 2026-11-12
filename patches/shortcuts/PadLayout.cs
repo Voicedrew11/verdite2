@@ -16,7 +16,7 @@ namespace Kf2.Shortcuts;
 /// them (<see cref="HostWindow.PadButtons"/>, chained after whatever was there), and
 /// a press is counted only from a real button: the default bindings put the left stick
 /// on the d-pad's bits too, and a button only a stick holds
-/// (<see cref="HostWindow.PadStickButtons"/>, RecompOne 0114) is not a press. Pushing
+/// (<see cref="HostWindow.PadStickButtons"/>, RecompOne 0125) is not a press. Pushing
 /// the stick still clears those bits from the game's word, as Analog moves. And
 /// the game's pad word is rewritten in player control's pre-hook, which runs only in
 /// the world. So menus, the keyboard (Space still attacks, A and D still strafe), the

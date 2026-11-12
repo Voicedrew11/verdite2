@@ -2006,7 +2006,7 @@ yet confirmed by the player.**
 
 ## The scene is patched by chunk too (2026-11-11)
 
-**A patch now reaches the GPU as the chunks it changed** (RecompOne `0113`).
+**A patch now reaches the GPU as the chunks it changed** (RecompOne `0124`).
 `RetainedScene` lays the static map out with spare room after each (range, chunk)
 slot, filled with degenerate triangles. `RetainedMap.Patch` marks the chunks its
 region's cells lie in (a triangle's chunk is its centre's) and publishes through

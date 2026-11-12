@@ -10,7 +10,7 @@ using Recompiled;
 
 Verdite.Core.Game.Configure(tag: "KF2");
 
-// Runs nobody watches: no window, no GL context, no audio device (runtime 0111),
+// Runs nobody watches: no window, no GL context, no audio device (runtime 0112),
 // and a world that ticks every frame with nothing waiting (FramePacing.Turbo).
 // The fuzzer's two switches; see "Fuzzing headless playthroughs" in
 // docs/DEVELOPMENT.md.

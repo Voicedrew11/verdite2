@@ -4030,12 +4030,12 @@ swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
   there; backing out changes nothing. The Select row asks which hotkey, as before;
   hotkey 1 is the game's Select slot.
 - **The pad** (`PadLayout`). The physical pad's buttons are watched where the runtime
-  polls them (0112's `HostWindow.PadButtons`, chained after the Japanese ○/× swap, and
+  polls them (0123's `HostWindow.PadButtons`, chained after the Japanese ○/× swap, and
   returned unchanged), and each new press of Square or a d-pad direction is counted.
   A press is a real button's only: the runtime's default bindings put the left
   stick's four directions on the d-pad's bits too (`Up = [11, 104]`, …), so pushing
   the stick swapped weapons and cycled hotkeys (reported from play). A button held
-  only through a stick binding (RecompOne 0114's `HostWindow.PadStickButtons`) is not
+  only through a stick binding (RecompOne 0125's `HostWindow.PadStickButtons`) is not
   counted; it still leaves the game's word with the rest of the taken bits.
   The game's pad word `0x80199554` is rewritten in player control's pre-hook
   (`func_8002957C`), which runs only in the world: the taken buttons' mask bits out,

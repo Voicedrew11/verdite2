@@ -254,7 +254,7 @@ place, the other way round:
 
 So a Japanese run swaps the pad's Cross and Circle (`JapaneseButtons`): ○ uses, opens
 and confirms, × opens the menu and cancels. It is done to the physical pad's two bits as
-the runtime polls it (`HostWindow.PadButtons`, RecompOne `0112`), not to the game's
+the runtime polls it (`HostWindow.PadButtons`, RecompOne `0123`), not to the game's
 table and not to the bindings, because everything else that presses a button means the
 US one: the keyboard (F uses, Tab and Escape open the menu), the mouse, auto start, the
 shortcuts, the menu pointer. Nothing is written to settings, and English runs are not
