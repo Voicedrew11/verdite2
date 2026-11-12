@@ -8,10 +8,8 @@ namespace Kf2.Shortcuts;
 /// left the magic hand, the right the weapon hand, the one between them and lower the
 /// hotkey Square uses. Each card is the HP panel's own frame (<see cref="CardFrame"/>)
 /// round the item's model (<see cref="HandsIcons"/>; a spell shows its element's
-/// crystal and its level as a Roman numeral). A hand's card has its button over the
-/// frame at its outer top corner, LB the magic hand's and RB the weapon hand's (the pad's
-/// L1 casts and R1 swings, <see cref="PadLayout"/>); an item hotkey its count in the
-/// bottom right.
+/// crystal and its level as a Roman numeral); an item hotkey its count in the bottom
+/// right. No button labels: the cross's places say which hand is which.
 ///
 /// Laid out in the game's pixels to work at 240p: the cards are 28 x 42, a pixel apart,
 /// as wide together as the HP panel, their bevel BevelLess pixels a side narrower than the
@@ -100,8 +98,6 @@ static class HandsHud
         else if (hItem != Shortcuts.None) Icon(c, m, d, HotkeyIcon, hItem, hotkeyX, hotkeyY, z);
         if (!HasRoom(m, d)) return;
 
-        Capitals(m, magicX, handsY, "LB");
-        Capitals(m, weaponX + CardWidth - CapitalsWidth("RB"), handsY, "RB");
         if (spell != Shortcuts.None) Numeral(m, magicX, handsY, SpellCrystals.Level(m, spell));
         if (hSpell != Shortcuts.None) Numeral(m, hotkeyX, hotkeyY, SpellCrystals.Level(m, hSpell));
         else if (hItem != Shortcuts.None) Count(m, hotkeyX, hotkeyY, m.ReadU8(Hands.Inventory + hItem));
@@ -172,10 +168,6 @@ static class HandsHud
             x += Advance(ch);
         }
     }
-
-    /// <summary>How wide <see cref="Capitals"/> draws <paramref name="text"/>.</summary>
-    static int CapitalsWidth(string text) =>
-        text.Length == 0 ? 0 : text[..^1].Sum(Advance) + CellWidth;
 
     static int Advance(char ch) => ch == 'I' ? NarrowAdvance : CellWidth;
 

@@ -4048,9 +4048,8 @@ swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
   the left the magic hand, the right the weapon hand, the middle one 14 pixels lower
   the current hotkey. **Laid out to work at 240p**, so nothing in it is scaled below
   the game's own pixels: the cards are 28 x 42, a pixel apart, 86 wide together as the
-  HP panel is; a hand's card has its button over the frame at its outer top corner,
-  `LB` the magic hand's (top left) and `RB` the weapon hand's (top right), in the menu's
-  capitals, in place of the slot number it had; an item hotkey its count in the bottom
+  HP panel is; no button labels (the `LB` and `RB` over the hands' outer top corners,
+  which had replaced slot numbers, were taken off as clutter); an item hotkey its count in the bottom
   right, a spell its numeral in the bottom left, each in the
   menu's fonts at their own size (digits 7 x 14, capitals 8 x 15, an I advanced 4). No
   names: the model and the number say it. **The margins are the panel's**: its left
