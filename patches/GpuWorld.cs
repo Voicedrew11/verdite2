@@ -450,37 +450,74 @@ public static class GpuWorld
         var v = f.View;
         var st = RetainedScene.Static;
         var hits = new List<string>();
-        Span<float> sx = stackalloc float[3], sy = stackalloc float[3], sz = stackalloc float[3];
+        Span<float> vx = stackalloc float[3], vy = stackalloc float[3], vz = stackalloc float[3];
+        Span<float> sx = stackalloc float[4], sy = stackalloc float[4];
+        float near = RetainedScene.MainNear;
         // Slot by slot: a range's span holds the spare room's degenerate triangles too.
         for (int slot = 0; slot < 5 * RetainedScene.Chunks; slot++)
             for (int i = RetainedScene.ChunkStart[slot]; i + 2 < RetainedScene.ChunkStart[slot] + RetainedScene.ChunkCount[slot]; i += 3)
             {
                 int r = slot / RetainedScene.Chunks;
-                bool ok = true;
-                for (int k = 0; k < 3 && ok; k++)
+                for (int k = 0; k < 3; k++)
                 {
                     ref readonly var c = ref st[i + k];
                     double dx = c.X - v.CamX, dy = c.Y - v.CamY, dz = c.Z - v.CamZ;
-                    float x = (float)(v.R00 * dx + v.R01 * dy + v.R02 * dz) + v.Tx;
-                    float y = (float)(v.R10 * dx + v.R11 * dy + v.R12 * dz) + v.Ty;
-                    float z = (float)(v.R20 * dx + v.R21 * dy + v.R22 * dz) + v.Tz;
-                    if (z < 1f) { ok = false; break; }
-                    sx[k] = v.Cx + v.H * x / z; sy[k] = v.Cy + v.H * y / z; sz[k] = z;
+                    vx[k] = (float)(v.R00 * dx + v.R01 * dy + v.R02 * dz) + v.Tx;
+                    vy[k] = (float)(v.R10 * dx + v.R11 * dy + v.R12 * dz) + v.Ty;
+                    vz[k] = (float)(v.R20 * dx + v.R21 * dy + v.R22 * dz) + v.Tz;
                 }
-                if (!ok) continue;
-                float d1 = (px - sx[1]) * (sy[0] - sy[1]) - (sx[0] - sx[1]) * (py - sy[1]);
-                float d2 = (px - sx[2]) * (sy[1] - sy[2]) - (sx[1] - sx[2]) * (py - sy[2]);
-                float d3 = (px - sx[0]) * (sy[2] - sy[0]) - (sx[2] - sx[0]) * (py - sy[0]);
-                if ((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0)) continue;
+                // Cut at the near plane, as the GPU does, so a face reaching past the eye
+                // (a wall beside the camera) is found where it is drawn.
+                int n = ClipNear(vx, vy, vz, near, v, sx, sy);
+                if (n < 3 || !Covers(sx[..n], sy[..n], px, py)) continue;
                 uint hid = (st[i].Flags >> RetainedScene.HalfShift) & RetainedScene.HalfBits;
                 int h = (int)hid - 1;
                 float area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sy[1] - sy[0]) * (sx[2] - sx[0]);
-                float zm = (sz[0] + sz[1] + sz[2]) / 3f;
+                float zm = (Math.Max(vz[0], near) + Math.Max(vz[1], near) + Math.Max(vz[2], near)) / 3f;
                 hits.Add($"{{\"range\":{r},\"tri\":{i},\"half\":[{(h >= 0 ? h / 2 % 80 : -1)},{(h >= 0 ? h / 160 : -1)},{(h >= 0 ? h & 1 : -1)}]," +
                          $"\"gate\":{(h >= 0 ? f.MainHalves[h] : -1)},\"z\":{zm:F0},\"key\":{(int)(zm / 4f) + 0xF0},\"area\":{area:F1}," +
                          $"\"flags\":\"{st[i].Flags:X8}\",\"rgb\":[{st[i].R:F0},{st[i].G:F0},{st[i].B:F0}]}}");
             }
         return $"{{\"ok\":true,\"serial\":{f.Serial},\"hits\":[{string.Join(",", hits)}]}}";
+    }
+
+    /// <summary>A view-space triangle cut at view depth <paramref name="near"/> and
+    /// projected: the polygon's corner count (0, 3 or 4) into <paramref name="sx"/>, <paramref name="sy"/>.</summary>
+    static int ClipNear(ReadOnlySpan<float> x, ReadOnlySpan<float> y, ReadOnlySpan<float> z, float near,
+                        in RetainedScene.View v, Span<float> sx, Span<float> sy)
+    {
+        int n = 0;
+        for (int k = 0; k < 3; k++)
+        {
+            int j = (k + 1) % 3;
+            bool inK = z[k] >= near, inJ = z[j] >= near;
+            if (inK) Put(x[k], y[k], z[k], v, sx, sy, ref n);
+            if (inK == inJ) continue;
+            float t = (near - z[k]) / (z[j] - z[k]);
+            Put(x[k] + t * (x[j] - x[k]), y[k] + t * (y[j] - y[k]), near, v, sx, sy, ref n);
+        }
+        return n;
+    }
+
+    static void Put(float x, float y, float z, in RetainedScene.View v, Span<float> sx, Span<float> sy, ref int n)
+    {
+        sx[n] = v.Cx + v.H * x / z;
+        sy[n] = v.Cy + v.H * y / z;
+        n++;
+    }
+
+    /// <summary>Whether the convex polygon covers the point, either winding.</summary>
+    static bool Covers(ReadOnlySpan<float> sx, ReadOnlySpan<float> sy, float px, float py)
+    {
+        bool neg = false, pos = false;
+        for (int k = 0; k < sx.Length; k++)
+        {
+            int j = (k + 1) % sx.Length;
+            float d = (px - sx[j]) * (sy[k] - sy[j]) - (sx[k] - sx[j]) * (py - sy[j]);
+            neg |= d < 0;
+            pos |= d > 0;
+        }
+        return !(neg && pos);
     }
 
     // ---- the probe -----------------------------------------------------------------

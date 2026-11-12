@@ -537,6 +537,33 @@ fps drawn at 20.0 ticks/s. `KF2_GPUWORLD_FOGZ=0` is the comparison.
 **Not checked:** the fog fix by eye, and whether it is known issue 2's wedge; the
 fluid scroll on an opaque face.
 
+**At the corners, a wall beside the camera fogged to black (2026-11-12).** Reported
+from play: up close to a wall, its near part was black, cut along a slanted line. The
+fix above runs only while `MainFogFromZ` is on, which is fog by depth or by distance;
+with PORT SETTINGS ▸ WORLD ▸ FOG at the corners (the dev store had `kf2.fog=0`), the
+GPU map is fogged from the corners' screen-affine `vFog` again, and a corner behind the
+eye carries the cue's saturated end into the face's visible part. `WorldVs` now marks
+a corner nearer than the near plane (`vClipped`), and at the corners `PrimFs` fogs a
+face it marks at the pixel's own depth; a face wholly in front keeps the game's corner
+fog. `gpuworld at X Y` now cuts each triangle at the near plane before testing the
+pixel, so it finds a face reaching past the eye (it skipped any triangle with a corner
+behind, which is how it missed this wall).
+
+Measured: area 1 (`KF2_AUTOSTART=2`), the camera put by `view` 20-700 units from the
+wall at z = 73984, x = 72700, eye height, level, five headings; share of near-black
+pixels in the presented picture (`snap`):
+
+| distance | corners, before | corners, after | depth | distance (default) | `gpuworld off` |
+|---|---|---|---|---|---|
+| 700 | 0.00-0.38 | 0 | 0 | 0 | 0 |
+| 160 | 0.34-0.79 | 0 | 0 | 0 | 0 |
+| 40 | (not taken) | 0 | (not taken) | (not taken) | 0.23-0.44 |
+| 20 | (not taken) | 0-0.13 | (not taken) | 0-0.13 | 0.33-0.79 |
+
+What is left at 20 units is the GPU map's near plane (`KF2_GPUWORLD_NEAR`, 16), the
+same in every mode, and the packets lose more there. **Not judged by eye**, and whether
+the player's own collision lets the eye that near a wall is not measured.
+
 #### Step 2, the third slice
 
 **The map's water drawn on the GPU, in the table's order. Mechanism measured; not
