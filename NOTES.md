@@ -487,6 +487,7 @@ The plan to draw the world from meshes kept on the GPU (retained-mode rendering)
 - The old path stays as the comparison
 - Rules this keeps
 - A rebuild for a half that draws nothing
+- Only the cells near a change are rebuilt
 
 ### [JAPANESE.md](docs/JAPANESE.md)
 

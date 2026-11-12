@@ -1930,10 +1930,52 @@ drawable still changes the hash. Measured with the same `goto` roam (40 moves ov
 before, 3 rebuilds after the load's two; after, none. `KF2_FPS=144 KF2_FPS_PROBE=1`:
 140-144 fps drawn at 14.9 ticks/s.
 
-**Still a rebuild:** a rewrite of a drawn half (a door, the drawbridge, a lift) costs a
-whole build of 55-70 ms. Making the build incremental, per changed half, is the
-remaining fix. The two menu-transition spikes in the first profile (48 and 72 ms,
-14-22 MB, booked to the menu loop's own time) are not explained by this and were not
-reproduced.
+**Still a rebuild:** a rewrite of a drawn half (a door, the drawbridge, a lift) cost a
+whole build of 55-70 ms. The next section makes it a patch. The two menu-transition
+spikes in the first profile (48 and 72 ms, 14-22 MB, booked to the menu loop's own
+time) are not explained by this and were not reproduced.
 
 **Mechanism measured; the hitch's absence in play not yet confirmed by the player.**
+
+## Only the cells near a change are rebuilt (2026-11-11)
+
+**A rewrite of drawn halves patches the map instead of building it whole.** A whole
+build of area 1 is 64-76 ms: the faces 12-14 ms, the weld (the 45-degree slides and
+the seam merge) 37-50 ms, `SetStatic` 7-9 ms. A door touches a few cells of 6,400.
+
+- **The map is kept by half.** The build walks the halves in a fixed order (`(tz * 80 +
+  tx) * 2 + half`) and records where each half's corners begin (`_halfStart`), with each
+  plane-shaped face for `RetainedPlanes` kept the same way (`PlaneNote`, replayed into
+  the planes at every publish). Each half's `HalfKey` at the build is kept too.
+- **A patch** runs when only the halves changed: the bank, the materials, the water's
+  rects, the swell's free set and the switches all as they were at the last build
+  (`_builtRest`), the lights not a rebuild, at most 600 changed cells. The cells within
+  one of a changed half (`PatchReach`) are rebuilt, since EvenFog's blends read the
+  neighbours' records and the weld and the merge move corners the next cell's mesh
+  shares. The cells within two are built past the kept corners so that the slides and
+  the merge see what a whole build sees there. The inner cells' halves are spliced into
+  a spare buffer in the build's order and the rest copied (`Splice`), then published as
+  before. Anything else, a load included, is a whole build.
+- **The swell no longer forces a second build.** The map hashed the swell's
+  `Generation`, which every swell build bumps, and the swell hashes the drawn halves
+  too, so a door anywhere was a patch and then a whole build on the next frame. The map
+  now hashes `WaterSwell.FreeHash`, the free set itself, so it rebuilds only when the
+  swell's answer for its corners changed.
+
+**Measured** (area 1 from slot 2, with a temporary switch that flipped the height of 9
+drawn halves near the player every 2 s; not committed): `KF2_GPUWORLD_MAPCHECK=1`
+builds the whole map after each patch and compares every corner's bytes in the build's
+order. Every patch matched: 202,503 corners and 48,711 plane notes. Without the check,
+a patch of 9 changed cells is 7.4-9.8 ms: faces 0.5-1.0, weld 1.1-1.7, `SetStatic`
+3.6-4.2, the rest the hash, the splice's copy (14 MB) and the keys. The whole builds at
+load are unchanged. `KF2_FPS=144 KF2_FPS_PROBE=1`: 140-144 fps drawn at 14.9-15.0
+ticks/s, as before the change.
+
+**What is left of the cost.** `SetStatic` still sorts and the backend still uploads the
+whole map (`UploadStatic`, the mip keys, the water's centres) on the next frame. The
+first profile showed the frame after a build's `DrawOTag` at 8-10 ms. Patching
+`RetainedScene`'s static buffer by chunk would remove both. That is a RecompOne change,
+in a commit of its own.
+
+**Mechanism measured; a real door in play not watched, and the hitch's absence not
+yet confirmed by the player.**

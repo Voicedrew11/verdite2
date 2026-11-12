@@ -59,11 +59,15 @@ public static class WaterSwell
     static long _halves, _moved, _pinned;
     static double _buildMs;
 
-    public static void Forget() { _hash = 0; _ready = false; }
+    public static void Forget() { _hash = 0; _ready = false; FreeHash = 0; }
 
-    /// <summary>Bumped by every build: the retained map carries which of its corners
-    /// are free (0085), so a new set is a rebuild there.</summary>
+    /// <summary>Bumped by every build.</summary>
     public static int Generation { get; private set; }
+
+    /// <summary>The set of free positions as one value, 0 for none: the retained map
+    /// carries which of its corners are free (0085), so a new set is a rebuild there,
+    /// and a swell rebuilt to the same set (a door far from the water) is not.</summary>
+    public static ulong FreeHash { get; private set; }
 
     /// <summary>Whether a world position is one the swell moves.</summary>
     public static bool IsFree(float x, float y, float z)
@@ -149,6 +153,7 @@ public static class WaterSwell
     {
         _meshes.Clear();
         _free.Clear();
+        FreeHash = 0;
         Generation++;
         Array.Fill(_rest, float.NaN);
         _ready = false;
@@ -209,6 +214,10 @@ public static class WaterSwell
         _rimPositions = rim.Count;
         _sharedPositions = shared.Count;
         _ready = true;
+        // Order-free: the sum of each position's own mix.
+        ulong free = 0;
+        foreach (long k in _free) free += ((ulong)k ^ 0x9E3779B97F4A7C15ul) * 0xBF58476D1CE4E5B9ul;
+        FreeHash = free | 1ul;
     }
 
     /// <summary>A mesh's faces sorted into water and not, once per model per build.</summary>

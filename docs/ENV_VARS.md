@@ -246,6 +246,7 @@ KF2_GPUWORLD_MODELS=0                  # leave the object walk's models on the p
 KF2_GPUWORLD_MIRROR=0                  # leave the planar walk's mirror on its packets under the GPU world renderer (a comparison; the `gpuworld mirror off` verb; `gpuworld mirror hide` leaves it undrawn)
 KF2_GPUWORLD_MESHES=0                  # take the lit models' faces to world space on the CPU every frame, not draw them from meshes kept on the GPU (a comparison; the `gpuworld meshes off` verb; `gpuworld instances` lists the frame's)
 KF2_GPUWORLD_MESHCHECK=1               # run the transform for every model drawn from its mesh and compare each face's keep decision, and each vertex's place, with the game's (slow)
+KF2_GPUWORLD_MAPCHECK=1                # after each map patch (only the cells near changed halves rebuilt), build the whole map too and compare every corner; prints `mapcheck: patch matches` or the halves that differ, and keeps the whole build (slow)
 KF2_GPUWORLD_POSES=0                   # copy every instance's posed vertices into the frame, not blend them from the pose store kept on the GPU (a comparison; the `gpuworld poses off` verb)
 KF2_GPUWORLD_POSECHECK=1               # decode every pose drawn from the store into RAM as well, and compare each vertex with the shader's blend of its texels
 KF2_GPUWORLD_ARM=0                     # leave the first-person arm on its packets under the GPU world renderer (a comparison; the `gpuworld arm off` verb)

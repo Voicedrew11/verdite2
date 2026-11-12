@@ -87,7 +87,7 @@ public static class RetainedMap
         });
         Event.AddListener<OverlayLoadedEvent>(e =>
         {
-            _hash = 0; _lightHash = 0;
+            _hash = 0; _lightHash = 0; _kept = false;
             _loadName = e.Name; _loadAt = Interrupts.ClockMs;
         });
     }
@@ -100,6 +100,7 @@ public static class RetainedMap
     {
         RetainedScene.Enabled = on;
         _hash = 0;
+        _kept = false;
     }
 
     /// <summary>0085. The static map lit and fogged in the vertex shader from the light
@@ -147,21 +148,31 @@ public static class RetainedMap
         // The corners carry EvenFog's blends, so switching them is a rebuild too. Lit
         // from the records (0085), a record the game rewrites is only an upload.
         Hash(mem);
-        ulong geo = (_hm * 31 + _he) ^ ((EvenFog.Enabled ? 1ul : 0ul) | (EvenFog.Blend ? 2ul : 0ul) | (EvenFog.Light ? 4ul : 0ul)
-                                         | (RecordsOn ? 8ul : 0ul)) << 60;
+        ulong switches = (EvenFog.Enabled ? 1ul : 0ul) | (EvenFog.Blend ? 2ul : 0ul) | (EvenFog.Light ? 4ul : 0ul)
+                       | (RecordsOn ? 8ul : 0ul);
+        ulong geo = (_hm * 31 + _he) ^ switches << 60;
         bool lights = _hl != _lightHash;
         _lightHash = _hl;
         if (geo != _hash || (lights && !RecordsOn))
         {
             _hash = geo;
+            // Only the halves changed: rebuild the cells near them (a door, a lift, a
+            // Level edit). Anything else is a whole build.
+            ulong rest = _he * 31 + switches;
+            bool halvesOnly = rest == _builtRest && !(lights && !RecordsOn);
             var start = System.Diagnostics.Stopwatch.GetTimestamp();
-            Build(c, mem);
-            if (RecordsOn) PackRecords(c, mem);
+            bool patched = halvesOnly && Patch(c, mem);
+            if (patched && MapCheck) CheckPatch(c, mem);
+            else if (!patched) Build(c, mem);
+            _builtRest = rest;
+            if (RecordsOn && !patched) PackRecords(c, mem);
             _buildMs = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
             _builds++;
             _lastWhy = _why;
             if (GpuWorld.Probing)
-                Console.WriteLine($"[KF2] mapprobe: build {_builds}, {_buildMs:F2} ms, {_n / 3} triangle(s), for " +
+                Console.WriteLine($"[KF2] mapprobe: build {_builds}, {_buildMs:F2} ms " +
+                                  $"({(patched ? $"patched {_patchedCells} changed cell(s)" : "whole")}: faces {_emitMs:F1}, " +
+                                  $"weld {_seamsMs:F1}, scene {_publishMs:F1}), {_n / 3} triangle(s), for " +
                                   $"{(_why.Length > 0 ? _why : "the load's reset ")}" +
                                   $"{Interrupts.ClockMs - _loadAt:F0} ms after {_loadName}");
         }
@@ -191,7 +202,7 @@ public static class RetainedMap
         ulong hl = LightHash(ram.Slice((int)(MapBase & mask), (int)MapBytes), ram.Slice((int)(LightBase & mask), (int)LightBytes));
         // 0085. The corners carry the water's rects and the swell's free positions.
         Span<uint> extra = [mem.ReadU32(Banks), (uint)Remaster.Surfaces.Serial, (uint)SurfaceMaterial.RectN,
-                            (uint)WaterSwell.Generation, mem.ReadU32(LightColour)];
+                            (uint)WaterSwell.FreeHash, (uint)(WaterSwell.FreeHash >> 32), mem.ReadU32(LightColour)];
         ulong he = Mix(0xCBF29CE484222325ul, MemoryMarshal.AsBytes(extra));
         _why = (hm != _hm ? "map " : "") + (hl != _hl ? "lights" + LightDiff(ram.Slice((int)(LightBase & mask), (int)LightBytes)) + " " : "") + (he != _he ? $"bank/materials/rects/swell({extra[0]:X},{extra[1]},{extra[2]},{extra[3]}) " : "");
         _hm = hm; _hl = hl; _he = he;
@@ -306,64 +317,282 @@ public static class RetainedMap
     public static string LastWhy => _lastWhy;
     public static double LastBuildMs => _buildMs;
 
+    // ---- the build, whole or by the halves that changed ------------------------------
+
+    const int HalfCount = 80 * 80 * 2;
+
+    /// <summary>Where each half's corners begin in <see cref="_tris"/> (a half is
+    /// `(tz * 80 + tx) * 2 + half`, the order the build walks), and its plane notes in
+    /// <see cref="_notes"/>; the last entry is the end.</summary>
+    static readonly int[] _halfStart = new int[HalfCount + 1], _noteStart = new int[HalfCount + 1];
+    /// <summary>The same for a region built past the end of the map's corners.</summary>
+    static readonly int[] _regionStart = new int[HalfCount + 1], _regionNoteStart = new int[HalfCount + 1];
+    /// <summary>Each half's <see cref="HalfKey"/> as the kept map was built from it.</summary>
+    static readonly uint[] _builtKey = new uint[HalfCount];
+    /// <summary>Whether the kept map, its starts and keys may be patched: false until a
+    /// whole build, and after a load.</summary>
+    static bool _kept;
+    /// <summary>Everything but the halves the kept map was built with: the bank, the
+    /// materials, the water, the swell, the switches. A change there is a whole build.</summary>
+    static ulong _builtRest;
+
+    /// <summary>A patch rebuilds the cells within <see cref="PatchReach"/> of a changed
+    /// half (EvenFog's blends read the neighbours' records, and the weld and the seam
+    /// merge move corners a cell's mesh shares with the next), and builds one cell more
+    /// around them so the weld and the merge see what the whole build sees there.</summary>
+    const int PatchReach = 1;
+    /// <summary>Past this many changed cells a whole build is as quick.</summary>
+    const int PatchMostCells = 600;
+
+    /// <summary>A plane-shaped face for <see cref="RetainedPlanes"/>, kept by half so a
+    /// patch can hand the whole set over again.</summary>
+    struct PlaneNote
+    {
+        public float X0, X1, X2, X3, Y0, Y1, Y2, Y3, Z0, Z1, Z2, Z3;
+        public int Corners;
+        public bool Semi;
+        public byte Mat;
+        public uint TPage, Rect;
+    }
+
+    static PlaneNote[] _notes = new PlaneNote[1024], _notesSpare = new PlaneNote[1024];
+    static int _noteN;
+    static RetainedScene.Vertex[] _trisSpare = new RetainedScene.Vertex[1 << 16];
+    static (int X, int Y, int Z)[] _rawSpare = new (int, int, int)[1 << 16];
+    static readonly bool[] _changed = new bool[80 * 80], _inner = new bool[80 * 80], _region = new bool[80 * 80];
+    static int _patchedCells;
+    static double _emitMs, _publishMs;
+    static long _patches;
+
+    /// <summary>KF2_GPUWORLD_MAPCHECK=1: after each patch, build the whole map as well
+    /// and compare every corner; the whole build is kept.</summary>
+    public static bool MapCheck = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MAPCHECK")?.Trim() is "1";
+
     static void Build(CpuContext c, PSMemory mem)
     {
+        var start = System.Diagnostics.Stopwatch.GetTimestamp();
         _n = 0;
-        _slide.Clear();
+        _noteN = 0;
+        _patchedCells = 0;
         _checkPacked = false;
         _halves = _faces = _skippedModels = _lightBlended = _fogBlended = _corners = 0;
         _cue.Clear();
-        RetainedPlanes.Clear();
+        _kept = false;
         _table = mem.ReadU32(Banks);
-        if (_table == 0) { RetainedScene.SetStatic([]); return; }
-        uint rgbc = mem.ReadU32(LightColour);
+        if (_table == 0) { RetainedPlanes.Clear(); RetainedScene.SetStatic([]); return; }
 
+        _slide.Clear();
+        EmitCells(c, mem, null, _halfStart, _noteStart);
+        _emitMs = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        _seamsMoved = 0;
+        var seamsAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (Weld) { Slide(0, _n); CloseSeams(0, _n); }
+        _seamsMs = System.Diagnostics.Stopwatch.GetElapsedTime(seamsAt).TotalMilliseconds;
+        Publish();
+        KeepKeys(mem);
+        _kept = true;
+        if (Environment.GetEnvironmentVariable("KF2_GPUWORLD_SEAMS") is { Length: > 0 } tj) SeamCensus(tj);
+        if (Environment.GetEnvironmentVariable("KF2_GPUWORLD_DUMPMAP") is { Length: > 0 } dir) DumpMap(dir);
+    }
+
+    /// <summary>Rebuild only the cells near the halves whose <see cref="HalfKey"/>
+    /// changed and splice them into the kept map, in place of a whole build. False when
+    /// it cannot (nothing kept, another bank, too much changed): build it whole.</summary>
+    static bool Patch(CpuContext c, PSMemory mem)
+    {
+        if (!_kept || mem.ReadU32(Banks) != _table) return false;
+        var start = System.Diagnostics.Stopwatch.GetTimestamp();
+        var map = mem.Ram.Slice((int)(MapBase & (uint)(mem.Ram.Length - 1)), (int)MapBytes);
+        Array.Clear(_changed);
+        int cells = 0;
+        for (int h = 0; h < HalfCount; h++)
+        {
+            if (HalfKey(map.Slice(h * 5, 5)) == _builtKey[h] || _changed[h >> 1]) continue;
+            _changed[h >> 1] = true;
+            cells++;
+        }
+        if (cells > PatchMostCells) return false;
+        Grow(_changed, _inner, PatchReach);
+        Grow(_changed, _region, PatchReach + 1);
+
+        // The region is built past the kept corners, then spliced.
+        int keptN = _n, keptNotes = _noteN;
+        _slide.Clear();
+        EmitCells(c, mem, _region, _regionStart, _regionNoteStart);
+        _emitMs = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        _seamsMoved = 0;
+        var seamsAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (Weld) { Slide(keptN, _n); CloseSeams(keptN, _n); }
+        _seamsMs = System.Diagnostics.Stopwatch.GetElapsedTime(seamsAt).TotalMilliseconds;
+        Splice(keptN, keptNotes);
+        Publish();
+        KeepKeys(mem);
+        _patchedCells = cells;
+        _patches++;
+        return true;
+    }
+
+    /// <summary>The cells within <paramref name="reach"/> of a marked one.</summary>
+    static void Grow(bool[] from, bool[] to, int reach)
+    {
+        Array.Clear(to);
+        for (int z = 0; z < 80; z++)
+        for (int x = 0; x < 80; x++)
+        {
+            if (!from[z * 80 + x]) continue;
+            for (int dz = -reach; dz <= reach; dz++)
+            for (int dx = -reach; dx <= reach; dx++)
+            {
+                int nz = z + dz, nx = x + dx;
+                if ((uint)nz < 80u && (uint)nx < 80u) to[nz * 80 + nx] = true;
+            }
+        }
+    }
+
+    /// <summary>The kept map with each inner cell's halves taken from the region built
+    /// past its end, into the spare buffers, which then become the kept ones.</summary>
+    static void Splice(int keptN, int keptNotes)
+    {
+        int need = _n, notesNeed = _noteN;
+        if (_trisSpare.Length < need) { _trisSpare = new RetainedScene.Vertex[_tris.Length]; _rawSpare = new (int, int, int)[_tris.Length]; }
+        if (_notesSpare.Length < notesNeed) _notesSpare = new PlaneNote[_notes.Length];
+        int n = 0, notes = 0;
+        for (int h = 0; h < HalfCount; h++)
+        {
+            bool fresh = _inner[h >> 1];
+            int from = fresh ? _regionStart[h] : _halfStart[h], to = fresh ? _regionStart[h + 1] : _halfStart[h + 1];
+            int nFrom = fresh ? _regionNoteStart[h] : _noteStart[h], nTo = fresh ? _regionNoteStart[h + 1] : _noteStart[h + 1];
+            _halfStart[h] = n;
+            _noteStart[h] = notes;
+            Array.Copy(_tris, from, _trisSpare, n, to - from);
+            Array.Copy(_raw, from, _rawSpare, n, to - from);
+            n += to - from;
+            Array.Copy(_notes, nFrom, _notesSpare, notes, nTo - nFrom);
+            notes += nTo - nFrom;
+        }
+        _halfStart[HalfCount] = n;
+        _noteStart[HalfCount] = notes;
+        (_tris, _trisSpare) = (_trisSpare, _tris);
+        (_raw, _rawSpare) = (_rawSpare, _raw);
+        (_notes, _notesSpare) = (_notesSpare, _notes);
+        _n = n;
+        _noteN = notes;
+    }
+
+    static void KeepKeys(PSMemory mem)
+    {
+        var map = mem.Ram.Slice((int)(MapBase & (uint)(mem.Ram.Length - 1)), (int)MapBytes);
+        for (int h = 0; h < HalfCount; h++) _builtKey[h] = HalfKey(map.Slice(h * 5, 5));
+    }
+
+    /// <summary>The halves of the marked cells (all of them for null), appended to the
+    /// corners from <see cref="_n"/>, each half's start written to <paramref name="start"/>.</summary>
+    static void EmitCells(CpuContext c, PSMemory mem, bool[]? cells, int[] start, int[] noteStart)
+    {
+        uint rgbc = mem.ReadU32(LightColour);
         var snap = c.Snapshot();
         Gte.Save(_gteSaved);
         try
         {
-            for (int tz = 0; tz < 80; tz++)
-            for (int tx = 0; tx < 80; tx++)
-            for (int half = 0; half < 2; half++)
+            for (int h = 0; h < HalfCount; h++)
             {
-                uint rec = MapBase + (uint)(tz * 800 + tx * 10 + half * 5);
+                start[h] = _n;
+                noteStart[h] = _noteN;
+                int cell = h >> 1;
+                if (cells != null && !cells[cell]) continue;
+                uint rec = MapBase + (uint)(cell * 10 + (h & 1) * 5);
                 uint model = mem.ReadU8(rec);
                 if (model >= 240) continue;
                 // The table's +4 is the far-model gate's limit (TileWalk.Beyond), not a
                 // count: models past it are drawn unless that gate is set.
                 if (!Sane(mem, model)) { _skippedModels++; continue; }
-                Half(c, mem, rec, model, tx, tz, half, rgbc);
+                Half(c, mem, rec, model, cell % 80, cell / 80, h & 1, rgbc);
             }
+            start[HalfCount] = _n;
+            noteStart[HalfCount] = _noteN;
         }
         finally
         {
             Gte.Load(_gteSaved);
             c.Restore(snap);
         }
-        if (Weld && _slide.Count > 0)
-        {
-            // A slide is taken only onto a corner something else is at: one the axis snap
-            // put there (the straight run beside the wall) or another wall's slide (two
-            // corner pieces meeting). Elsewhere the axis snap already meets the neighbour.
-            var corners = new HashSet<(int, int, int)>(_n);
-            for (int i = 0; i < _n; i++) corners.Add(((int)_tris[i].X, (int)_tris[i].Y, (int)_tris[i].Z));
-            var met = new Dictionary<(int, int, int), int>();
-            foreach (var (from, at) in _slide)
-                if (!float.IsNaN(at.X)) { var key = ((int)at.X, from.Item2, (int)at.Z); met[key] = met.GetValueOrDefault(key) + 1; }
-            foreach (var (key, count) in met) if (count > 1) corners.Add(key);
-            for (int i = 0; i < _n; i++)
-                if (_slide.TryGetValue(_raw[i], out var to) && !float.IsNaN(to.X)
-                    && corners.Contains(((int)to.X, _raw[i].Y, (int)to.Z)))
-                { _tris[i].X = to.X; _tris[i].Z = to.Z; }
-        }
-        _seamsMoved = 0;
-        var seamsAt = System.Diagnostics.Stopwatch.GetTimestamp();
-        if (Weld) CloseSeams();
-        _seamsMs = System.Diagnostics.Stopwatch.GetElapsedTime(seamsAt).TotalMilliseconds;
+    }
+
+    /// <summary>The 45-degree walls' slides (<see cref="WeldFace"/>) over the corners
+    /// in [from, to). A slide is taken only onto a corner something else is at: one the
+    /// axis snap put there (the straight run beside the wall) or another wall's slide
+    /// (two corner pieces meeting). Elsewhere the axis snap already meets the neighbour.</summary>
+    static void Slide(int from, int to)
+    {
+        if (_slide.Count == 0) return;
+        var corners = new HashSet<(int, int, int)>(to - from);
+        for (int i = from; i < to; i++) corners.Add(((int)_tris[i].X, (int)_tris[i].Y, (int)_tris[i].Z));
+        var met = new Dictionary<(int, int, int), int>();
+        foreach (var (raw, at) in _slide)
+            if (!float.IsNaN(at.X)) { var key = ((int)at.X, raw.Item2, (int)at.Z); met[key] = met.GetValueOrDefault(key) + 1; }
+        foreach (var (key, count) in met) if (count > 1) corners.Add(key);
+        for (int i = from; i < to; i++)
+            if (_slide.TryGetValue(_raw[i], out var at) && !float.IsNaN(at.X)
+                && corners.Contains(((int)at.X, _raw[i].Y, (int)at.Z)))
+            { _tris[i].X = at.X; _tris[i].Z = at.Z; }
+    }
+
+    /// <summary>The corners to the scene and the plane notes to the planes.</summary>
+    static void Publish()
+    {
+        var at = System.Diagnostics.Stopwatch.GetTimestamp();
         RetainedScene.SetStatic(_tris.AsSpan(0, _n));
+        RetainedPlanes.Clear();
+        Span<float> px = stackalloc float[4], py = stackalloc float[4], pz = stackalloc float[4];
+        for (int i = 0; i < _noteN; i++)
+        {
+            ref readonly var p = ref _notes[i];
+            px[0] = p.X0; px[1] = p.X1; px[2] = p.X2; px[3] = p.X3;
+            py[0] = p.Y0; py[1] = p.Y1; py[2] = p.Y2; py[3] = p.Y3;
+            pz[0] = p.Z0; pz[1] = p.Z1; pz[2] = p.Z2; pz[3] = p.Z3;
+            RetainedPlanes.Note(px, py, pz, p.Corners, p.Semi, p.Mat, p.TPage, p.Rect);
+        }
         RetainedPlanes.Finish();
-        if (Environment.GetEnvironmentVariable("KF2_GPUWORLD_SEAMS") is { Length: > 0 } tj) SeamCensus(tj);
-        if (Environment.GetEnvironmentVariable("KF2_GPUWORLD_DUMPMAP") is { Length: > 0 } dir) DumpMap(dir);
+        _publishMs = System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
+    }
+
+    static void NotePlane(Span<float> px, Span<float> py, Span<float> pz, int corners, bool semi, byte mat, uint tpage, uint rect)
+    {
+        if (_noteN == _notes.Length) Array.Resize(ref _notes, _notes.Length * 2);
+        int last = corners - 1;
+        _notes[_noteN++] = new PlaneNote
+        {
+            X0 = px[0], X1 = px[1], X2 = px[2], X3 = px[Math.Min(3, last)],
+            Y0 = py[0], Y1 = py[1], Y2 = py[2], Y3 = py[Math.Min(3, last)],
+            Z0 = pz[0], Z1 = pz[1], Z2 = pz[2], Z3 = pz[Math.Min(3, last)],
+            Corners = corners, Semi = semi, Mat = mat, TPage = tpage, Rect = rect,
+        };
+    }
+
+    /// <summary>KF2_GPUWORLD_MAPCHECK: the patched map against a whole build of the same
+    /// bytes, corner by corner in the build's order; the whole build is kept.</summary>
+    static void CheckPatch(CpuContext c, PSMemory mem)
+    {
+        var tris = _tris.AsSpan(0, _n).ToArray();
+        var starts = (int[])_halfStart.Clone();
+        int notes = _noteN;
+        Build(c, mem);
+        int bad = 0, badHalves = 0;
+        var where = new System.Text.StringBuilder();
+        for (int h = 0; h < HalfCount; h++)
+        {
+            int a = starts[h], b = _halfStart[h], len = starts[h + 1] - a;
+            bool differs = len != _halfStart[h + 1] - b;
+            for (int i = 0; !differs && i < len; i++)
+                if (!MemoryMarshal.AsBytes(new ReadOnlySpan<RetainedScene.Vertex>(in tris[a + i]))
+                        .SequenceEqual(MemoryMarshal.AsBytes(new ReadOnlySpan<RetainedScene.Vertex>(in _tris[b + i])))) { differs = true; bad++; }
+            if (!differs) continue;
+            badHalves++;
+            if (badHalves <= 8) where.Append($" ({(h >> 1) % 80},{(h >> 1) / 80})h{h & 1}");
+        }
+        Console.WriteLine($"[KF2] mapcheck: patch {(badHalves == 0 ? "matches" : "DIFFERS from")} the whole build " +
+                          $"({tris.Length} corner(s), {_n} whole; {notes} plane note(s), {_noteN} whole)" +
+                          (badHalves > 0 ? $"; {badHalves} half(s) differ:{where}" : ""));
     }
 
     // KF2_GPUWORLD_DUMPMAP=dir: each build's triangles as x,y,z,flags per corner (CSV), for offline seam work.
@@ -565,7 +794,7 @@ public static class RetainedMap
                     tail.Flags |= RetainedScene.FlagQuadTail;
                     Emit(tail, ex, py, ez, px, pz, uv, col, qa, qb, qc, lw, nzs, swell, 1, 3, 2);
                 }
-                RetainedPlanes.Note(px, py, pz, corners, semi, mat, tpage, rect);
+                NotePlane(px, py, pz, corners, semi, mat, tpage, rect);
                 _faces++;
             }
             face = at + ((word >> 6) & 0x3FCu);
@@ -631,12 +860,12 @@ public static class RetainedMap
     /// edge. See "Hairlines in leaning walls" in docs/GPU_RENDERER.md.</summary>
     const float SeamReach = 32f;
 
-    static void CloseSeams()
+    static void CloseSeams(int from, int to)
     {
         static (int, int, int) Key(in RetainedScene.Vertex v) => ((int)MathF.Round(v.X), (int)MathF.Round(v.Y), (int)MathF.Round(v.Z));
         static ((int, int, int), (int, int, int)) Edge((int, int, int) p, (int, int, int) q) => p.CompareTo(q) < 0 ? (p, q) : (q, p);
         var uses = new Dictionary<((int, int, int), (int, int, int)), int>();
-        for (int i = 0; i + 2 < _n; i += 3)
+        for (int i = from; i + 2 < to; i += 3)
         {
             if ((_tris[i].Flags & RetainedScene.FlagSemi) != 0) continue;
             var a = Key(_tris[i]); var b = Key(_tris[i + 1]); var c = Key(_tris[i + 2]);
@@ -688,7 +917,7 @@ public static class RetainedMap
             }
         }
         if (parent.Count == 0) return;
-        for (int i = 0; i < _n; i++)
+        for (int i = from; i < to; i++)
         {
             var k = Key(_tris[i]);
             if (!parent.ContainsKey(k)) continue;
