@@ -1693,6 +1693,15 @@ Four files in the directory have no entry below:
   unprojection's. With `h` 0, which every existing caller passes, nothing changes, so
   Verdite2 and Verdite3 draw as before. The seventeenth diff in the patch file. See
   "The arm on the retained scene" in King's Field's `docs/GPU_RENDERER.md`.
+  Amended again (2026-11-12): fog at the corners (`MainFogFromZ` off) on a face the GPU
+  cuts at the near plane. `WorldVs` puts a corner's `vFog` from `H/max(z, 1)`, which
+  behind the eye is the cue's saturated end, and the clip interpolates it into the
+  face's visible part: a wall beside the camera fogged to black over up to 79% of the
+  picture. `WorldVs` now writes `vClipped` (1 for a corner nearer than `uNear`, `PrimVs`
+  0), `uCueFromZ` is the view's H in every mode, and `uCueAtCorners` keeps `PrimFs`'s
+  `fogRaw` on `vFog` unless `vClipped` is above 0, so only a cut face is fogged at the
+  pixel's depth; a face wholly in front is the game's corner fog as before. Not in the
+  patch file.
 
 - `0086-retained-model-mask.patch` — the retained models (`0085`) are drawn at slot 1,
   ahead of every packet the walk sends after them, and `0051`'s tolerance (1 unit
@@ -1913,6 +1922,20 @@ Four files in the directory have no entry below:
   water, where before they stood 30, and with only the subtracted pass drawn they
   were 106 *brighter* than the murk around them; 342 → 336 fps uncapped, the copy.
   **No recompile.** See "The HUD over the water" in Verdite3's `WATER.md`.
+  *Amended (2026-11-12), two ways the normal pass disagreed with the colour pass.*
+  `NormalFs` returned for a cover (id 3) before its transparent-texel test, so a
+  textured 2D letter's whole box covered the veil under it, and the present laid
+  the occlusion on that box at full share instead of the veil's: a faint square
+  round each HUD letter (KF2's HP and MP), plainest in motion. The test now comes
+  first, and a sprite overlay carries its texel too (`SurfaceTex`). And the pass
+  drew with no scissor, so a model cropped by a draw area (KF2's hand-card icons)
+  left its cropped-off part in the normal and surface buffers, a faint grey shape:
+  `AoGeometry` keeps each run's draw area (`Clips`, from `GlCore.TargetClip`, which
+  the colour pass's scissor now uses too) and `RenderSurfaces` scissors each run to
+  it. Measured in KF2 (fdat05, slot 2, a fixed camera, paused, AO on at 21:9): the
+  only pixels that change are the boxes round the "HP" and "MP" letters, 9151 of
+  them, brighter by 12 (RGB sum) where the occlusion under the panel is nonzero;
+  two runs of the fixed build are identical. The icon crop not measured.
 - `0100-radial-fog.patch` — the GTE's depth cue is a function of SZ, so the
   retained shaders, which recompute it per pixel, fogged a pixel at the side of the
   picture as if nearer than it is, and the fog moved as the view turned.
@@ -2209,6 +2232,58 @@ Four files in the directory have no entry below:
   (`DrawWorldModels`) are unchanged. Measured in Verdite3 (`KF3_OBJECT_PULL`, "Objects
   sunk into the map" in its `docs/PICTURE.md`). **No recompile.** Nothing changes
   for a game that leaves `DepthPull` at 0.
+- `0123-pad-buttons.patch` — a pad's own buttons, rewritable by the game.
+  `InputManager.PollGamepads` used to AND each pad's buttons straight into the word
+  the keyboard had just written; it now builds the pad's word alone, passes it through
+  `InputManager.PadButtons` (`(port, buttons) -> buttons`, active low, `Controller`'s
+  layout; forwarded as `HostWindow.PadButtons`, the class being internal) and then
+  ANDs it in, which is the same word when nothing is set. For a convention that
+  belongs to the hardware and not to the bindings: KF2 swaps the pad's Cross and
+  Circle in a Japanese run, which leaves the keyboard, the mouse and the port's own
+  presses with their US meaning, and writes nothing to settings (the bindings are
+  saved on exit, so swapping them in memory would have been saved). Measured in KF2:
+  builds, and a headless Japanese run reaches an area through `KF2_AUTOSTART`. **Not
+  tried on a pad.** **No recompile.**
+- `0124-static-by-chunk.patch` — the retained static map patched by chunk.
+  `RetainedScene.SetStatic` lays each (range, chunk) slot out with spare room after
+  its corners (`ChunkCap`: an eighth more, at least 16 triangles), the room all zero,
+  so three spare corners are a degenerate triangle that draws nothing
+  (`RetainedScene.IsPad`; a map corner always carries `FlagRect`). The new
+  `PatchStatic(tris, chunks)` takes the whole map as before plus the chunks that may
+  have changed; it rewrites those chunks, and any whose count moved, in their slots,
+  with their bounds, records and fog, and refuses (the caller lays out whole) when a
+  slot's corners outgrow its room. `StaticGeneration` now means a new layout;
+  `StaticRevision` bumps on every change, and `DirtySince(revision, list)` gives the
+  ranges rewritten since. The backend follows: `UploadStatic` sends only those
+  ranges with `BufferSubData`; the mip keys are refreshed over them and `IndexHalfKeys`
+  is a counting pass instead of a sort; the water's centres and the shadows' cubemaps
+  key on the revision; `DrawStaticChunks` joins neighbouring visible chunks across
+  their spare room. `VerifyStatic(tris)` lays the same map out whole and compares every
+  slot and chunk, then puts the patched layout back. Measured in KF2 (area 1, nine
+  tiles changed near the player every 2 s): the upload 4.6-5.1 ms whole to 0.1 ms, the
+  mip refresh 3.0-4.8 ms to 0.9-1.6 ms, the scene's part of a patch 1.1-1.7 ms, every
+  patch matching a whole layout; the picture hash identical to the build before at
+  three spots; 144.0 fps drawn at 14.9-15.0 ticks/s, no GL error under `KF2_GLDEBUG=1`.
+  Merged (2026-11-12) with the fork's `0111` (kept static maps), written against the
+  old `SetStatic`: the spare array is taken against the laid-out length with its room,
+  generations come from `0111`'s counter in `SetStatic` and in a long run of patches,
+  `PatchStatic` refuses while a kept map owns the array (the caller lays out whole into
+  another), a kept map keeps `ChunkCap` too, and `RestoreStatic` starts a new revision
+  with nothing dirty. The backend's `SwapStatic` parks and restores the mip index
+  (`_mipIndex`) with the rest, takes the chunk tables through `CopyChunkTables` (the
+  caps with them) and sets the revisions it now matches; `UploadStatic` tries a swap
+  only when the generation changed. Verdite2 keeps no maps, so none of this runs here.
+  **No recompile.**
+- `0125-stick-buttons.patch` — which of a pad's buttons only a stick holds.
+  The default bindings put the left stick's four directions on the d-pad's bits
+  (`Up = [11, 104]`, …), so the word `0123` hands the game cannot tell a d-pad press
+  from a push of the stick. `InputManager.PollGamepads` now records, before calling
+  `PadButtons`, the buttons each pad holds this poll only through a stick binding
+  (`StickOnly`: a stick binding pressed and no other binding of that button),
+  read as `HostWindow.PadStickButtons(port)` (active high, `Controller`'s layout,
+  valid inside `PadButtons`). The word itself is unchanged. KF2's Souls layout
+  (`Shortcuts`) counts d-pad presses without them, so pushing the stick no longer
+  swaps a hand or cycles a hotkey. **No recompile.**
 
 ## Package bumps
 

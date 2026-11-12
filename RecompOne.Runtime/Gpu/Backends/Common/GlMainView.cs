@@ -11,7 +11,7 @@ namespace RecompOne.Runtime.Hle;
 /// </summary>
 public sealed partial class GlCore
 {
-    int _uwTrueColor, _uwPlainZ, _uwSnap, _uwPerPixel, _uwDither, _uwCueFromZ;
+    int _uwTrueColor, _uwPlainZ, _uwSnap, _uwPerPixel, _uwDither, _uwCueFromZ, _uwCueAtCorners = -1;
 
     // The map into the normal and surface buffers (WorldNormalVs, NormalFs).
     uint _progWorldNrm;
@@ -30,6 +30,7 @@ public sealed partial class GlCore
         _uwPerPixel = _gl.GetUniformLocation(_progWorld, "uWorldPerPixel");
         _uwDither = _gl.GetUniformLocation(_progWorld, "uWorldDither");
         _uwCueFromZ = _gl.GetUniformLocation(_progWorld, "uCueFromZ");
+        _uwCueAtCorners = _gl.GetUniformLocation(_progWorld, "uCueAtCorners");
         int L(string n) => _gl.GetUniformLocation(_progWorld, n);
         _uwDepthBias = L("uDepthBias"); _uwDepthSlope = L("uDepthSlope"); _uwDepthOnly = L("uDepthOnly"); _uwDepthCap = L("uDepthCap"); _uwDepthCapZ = L("uDepthCapZ");
         _uwDepthPull = L("uDepthPull");
@@ -447,8 +448,9 @@ public sealed partial class GlCore
         // 0089. The main view only: the mirror's walk is the game's own.
         SendFade(_uwFade, _uwFadeZ, mirror ? null : f);
         // Fogged at each pixel's own depth: a face clipped at the eye has no corner
-        // whose screen-affine fog holds at the clip.
-        if (_uwCueFromZ >= 0) _gl.Uniform1(_uwCueFromZ, RetainedScene.MainFogFromZ ? Math.Max(1f, f.View.H) : 0f);
+        // whose screen-affine fog holds at the clip. At the corners, only such a face.
+        if (_uwCueFromZ >= 0) _gl.Uniform1(_uwCueFromZ, Math.Max(1f, f.View.H));
+        if (_uwCueAtCorners >= 0) _gl.Uniform1(_uwCueAtCorners, RetainedScene.MainFogFromZ ? 0 : 1);
         // The mirrored walk's water was never swollen (WaterSwell stands down for it).
         if (mirror) { if (_uwSwellOn >= 0) _gl.Uniform1(_uwSwellOn, 0); }
         else SendWorldSwell(f, _uwSwellOn, _uwSwell);
@@ -999,9 +1001,11 @@ public sealed partial class GlCore
     unsafe bool SortWater(RetainedScene.Frame f, in RetainedScene.View v, byte[] halves)
     {
         var st = RetainedScene.Static;
-        if (_wCentreGen != RetainedScene.StaticGeneration)
+        // A patch moves corners too; recomputed whole (a millisecond), since a quad's
+        // two triangles may sit in two chunks.
+        if (_wCentreGen != RetainedScene.StaticRevision)
         {
-            _wCentreGen = RetainedScene.StaticGeneration;
+            _wCentreGen = RetainedScene.StaticRevision;
             if (_wCentre.Length < st.Length) _wCentre = new float[st.Length];
             for (int i = RetainedScene.StaticStart[1]; i + 2 < st.Length; i += 3)
             {

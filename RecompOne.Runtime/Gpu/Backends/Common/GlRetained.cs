@@ -19,8 +19,12 @@ public sealed partial class GlCore
     // uploaded the new map: drawn by the new table, a larger map's ranges ran past the
     // old buffer's end, which NVIDIA's driver faults on.
     readonly int[] _worldChunkStart = new int[5 * RetainedScene.Chunks], _worldChunkCount = new int[5 * RetainedScene.Chunks];
+    readonly int[] _worldChunkCap = new int[5 * RetainedScene.Chunks];
     readonly int[] _worldStaticCount = new int[5];
     int _worldVerts;
+    // The revision of the static map the buffer holds, and a patch's ranges to send.
+    int _worldRev = -1;
+    readonly List<(int Start, int Count)> _worldDirty = new();
     int _uwR, _uwCam, _uwT, _uwH, _uwC, _uwFb, _uwNear, _uwCueH, _uwFogOn, _uwMirror, _uwPlaneY, _uwPlaneBias;
     int _uwScale, _uwAniso, _uwBlend, _uwBlendOpaque, _uwFluidN;
     int _uwAtmosOn, _uwAtmosColour, _uwAtmosShape, _uwAtmosSkip;
@@ -327,6 +331,7 @@ public sealed partial class GlCore
         public List<(int TPage, int Clut, uint Rect)> Keys = new();
         public uint[] Entry = [];
         public int[] Looked = [], HalfKeyAt = [], HalfKeys = [], Lone = [];
+        public uint[] MipIndex = [];
     }
 
     readonly Dictionary<int, ParkedWorld> _parked = new();
@@ -351,6 +356,7 @@ public sealed partial class GlCore
                 Vao = _worldVao, Vbo = _worldVbo, MipVbo = _worldMipVbo, Verts = _worldVerts,
                 Mips = _mipKeysGen == _worldGen, KeyAt = _mipKeyAt, Keys = _mipKeys, Entry = _mipKeyEntry,
                 Looked = _mipLooked, HalfKeyAt = _halfKeyAt, HalfKeys = _halfKeys, Lone = _loneKeys,
+                MipIndex = _mipIndex,
             };
         else if (back != null)
         {
@@ -369,24 +375,39 @@ public sealed partial class GlCore
         _worldVao = back.Vao; _worldVbo = back.Vbo; _worldMipVbo = back.MipVbo;
         _mipKeyAt = back.KeyAt; _mipKeys = back.Keys; _mipKeyEntry = back.Entry;
         _mipLooked = back.Looked; _halfKeyAt = back.HalfKeyAt; _halfKeys = back.HalfKeys; _loneKeys = back.Lone;
+        _mipIndex = back.MipIndex;
         _mipKeysGen = back.Mips ? gen : -1;
+        _mipKeysRev = RetainedScene.StaticRevision;
         _mipTableDirty = true;
-        Array.Copy(RetainedScene.ChunkStart, _worldChunkStart, _worldChunkStart.Length);
-        Array.Copy(RetainedScene.ChunkCount, _worldChunkCount, _worldChunkCount.Length);
-        Array.Copy(RetainedScene.StaticCount, _worldStaticCount, _worldStaticCount.Length);
+        CopyChunkTables();
         _worldVerts = back.Verts;
         _worldGen = gen;
+        _worldRev = RetainedScene.StaticRevision;
         return true;
     }
 
     /// <summary>The static map, when it was rebuilt since the last upload.</summary>
-    void UploadStatic()
+    unsafe void UploadStatic()
     {
         UploadRecords();
         UploadNbHalves();
-        if (_worldGen == RetainedScene.StaticGeneration) return;
-        if (SwapStatic(RetainedScene.StaticGeneration)) return;
+        if (_worldGen == RetainedScene.StaticGeneration && _worldRev == RetainedScene.StaticRevision) return;
+        // 0111. A kept map put back: its parked buffers, as they were when parked
+        // (0124's patches are refused while a kept map owns the array).
+        if (_worldGen != RetainedScene.StaticGeneration && SwapStatic(RetainedScene.StaticGeneration)) return;
         var s = RetainedScene.Static;
+        // A patch of the same layout: only the slots it rewrote.
+        if (_worldGen == RetainedScene.StaticGeneration && RetainedScene.DirtySince(_worldRev, _worldDirty))
+        {
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _worldVbo);
+            foreach (var (start, count) in _worldDirty)
+                _gl.BufferSubData<RetainedScene.Vertex>(BufferTargetARB.ArrayBuffer, start * sizeof(RetainedScene.Vertex), s.Slice(start, count));
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+            CopyChunkTables();
+            RetainedScene.StaticPatchUploads++;
+            _worldRev = RetainedScene.StaticRevision;
+            return;
+        }
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _worldVbo);
         _gl.BufferData<RetainedScene.Vertex>(BufferTargetARB.ArrayBuffer, s, BufferUsageARB.StaticDraw);
         // The mip entries are attribute 9 of the same VAO, and UpdateWorldMips sizes them
@@ -398,11 +419,18 @@ public sealed partial class GlCore
             _gl.BufferData<uint>(BufferTargetARB.ArrayBuffer, new uint[Math.Max(s.Length, 1)], BufferUsageARB.StaticDraw);
         }
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
-        Array.Copy(RetainedScene.ChunkStart, _worldChunkStart, _worldChunkStart.Length);
-        Array.Copy(RetainedScene.ChunkCount, _worldChunkCount, _worldChunkCount.Length);
-        Array.Copy(RetainedScene.StaticCount, _worldStaticCount, _worldStaticCount.Length);
+        CopyChunkTables();
         _worldVerts = s.Length;
         _worldGen = RetainedScene.StaticGeneration;
+        _worldRev = RetainedScene.StaticRevision;
+    }
+
+    void CopyChunkTables()
+    {
+        Array.Copy(RetainedScene.ChunkStart, _worldChunkStart, _worldChunkStart.Length);
+        Array.Copy(RetainedScene.ChunkCount, _worldChunkCount, _worldChunkCount.Length);
+        Array.Copy(RetainedScene.ChunkCap, _worldChunkCap, _worldChunkCap.Length);
+        Array.Copy(RetainedScene.StaticCount, _worldStaticCount, _worldStaticCount.Length);
     }
 
     unsafe void UploadWorld(RetainedScene.Frame f)
@@ -554,13 +582,19 @@ public sealed partial class GlCore
     {
         int drawn = 0;
         _gl.BindVertexArray(_worldVao);
-        // Runs of neighbouring visible chunks are one draw.
-        int first = -1, count = 0;
+        // Runs of neighbouring visible chunks are one draw, the spare room between
+        // them (degenerate, RetainedScene.IsPad) drawn through.
+        int first = -1, room = 0, count = 0;
         for (int c = 0; c <= RetainedScene.Chunks; c++)
         {
             int k = r * RetainedScene.Chunks + c;
             bool take = c < RetainedScene.Chunks && _chunkVis[c] && _worldChunkCount[k] > 0;
-            if (take && first >= 0 && _worldChunkStart[k] == first + count) { count += _worldChunkCount[k]; continue; }
+            if (take && first >= 0 && _worldChunkStart[k] == first + room)
+            {
+                count = room + _worldChunkCount[k];
+                room += _worldChunkCap[k];
+                continue;
+            }
             count = Math.Min(count, _worldVerts - first);
             if (first >= 0 && count > 0)
             {
@@ -569,6 +603,7 @@ public sealed partial class GlCore
             }
             first = take ? _worldChunkStart[k] : -1;
             count = take ? _worldChunkCount[k] : 0;
+            room = take ? _worldChunkCap[k] : 0;
         }
         return drawn;
     }
@@ -959,7 +994,10 @@ public sealed partial class GlCore
     List<(int TPage, int Clut, uint Rect)> _mipKeys = new();
     uint[] _mipKeyEntry = [];
     uint[] _dynMip = [];
-    int _mipKeysGen = -1;
+    int _mipKeysGen = -1, _mipKeysRev = -1;
+    // Each static corner's key, one plus the key or 0, as _worldMipVbo holds them.
+    uint[] _mipIndex = [];
+    readonly List<(int Start, int Count)> _mipDirty = new();
     bool _mipTableDirty;
     uint _mipTableBuf, _mipTableTex;
     int _uwMipIndirect = -1;
@@ -982,9 +1020,35 @@ public sealed partial class GlCore
     {
         bool on = RetainedScene.Mips && GteDepth.Mipmaps && _mip != null && _uwMipOn >= 0;
         var st = RetainedScene.Static;
-        if (_mipKeysGen != RetainedScene.StaticGeneration)
+        if (_mipKeysGen == RetainedScene.StaticGeneration && _mipKeysRev != RetainedScene.StaticRevision
+            && RetainedScene.DirtySince(_mipKeysRev, _mipDirty))
+        {
+            // A patch: the rewritten slots' keys; a texture new to the map is a new key.
+            _mipKeysRev = RetainedScene.StaticRevision;
+            int had = _mipKeys.Count;
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _worldMipVbo);
+            foreach (var (start, count) in _mipDirty)
+            {
+                for (int i = start; i + 2 < start + count; i += 3)
+                {
+                    uint k = (uint)(MipKey(st[i]) + 1);
+                    _mipIndex[i] = _mipIndex[i + 1] = _mipIndex[i + 2] = k;
+                }
+                _gl.BufferSubData<uint>(BufferTargetARB.ArrayBuffer, start * 4, new ReadOnlySpan<uint>(_mipIndex, start, count));
+            }
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+            if (_mipKeys.Count > had)
+            {
+                Array.Resize(ref _mipKeyEntry, _mipKeys.Count);
+                Array.Resize(ref _mipLooked, _mipKeys.Count);
+                _mipTableDirty = true;
+            }
+            IndexHalfKeys(st, _mipIndex);
+        }
+        if (_mipKeysGen != RetainedScene.StaticGeneration || _mipKeysRev != RetainedScene.StaticRevision)
         {
             _mipKeysGen = RetainedScene.StaticGeneration;
+            _mipKeysRev = RetainedScene.StaticRevision;
             _mipKeyAt.Clear();
             _mipKeys.Clear();
             var index = new uint[Math.Max(st.Length, 1)];
@@ -998,6 +1062,7 @@ public sealed partial class GlCore
             _mipKeyEntry = new uint[Math.Max(_mipKeys.Count, 1)];
             _mipLooked = new int[Math.Max(_mipKeys.Count, 1)];
             _mipTableDirty = true;
+            _mipIndex = index;
             IndexHalfKeys(st, index);
         }
         long l0 = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -1066,32 +1131,52 @@ public sealed partial class GlCore
     /// built (one plus the key, 0 for none) and the half in each corner's flags.</summary>
     void IndexHalfKeys(ReadOnlySpan<RetainedScene.Vertex> st, uint[] index)
     {
+        // A counting pass by half, then each half's keys made distinct with a stamp per
+        // key: no sort, so a patch's re-index is cheap.
         int halves = RetainedScene.HalvesW * RetainedScene.HalvesH;
-        var pairs = new List<long>();
+        if (_halfKeyAt.Length != halves + 1) _halfKeyAt = new int[halves + 1];
+        Array.Clear(_halfKeyAt);
         var lone = new HashSet<int>();
+        int pairs = 0;
         for (int i = 0; i + 2 < st.Length; i += 3)
         {
             if (index[i] == 0) continue;
-            int key = (int)index[i] - 1;
             uint hid = (st[i].Flags >> RetainedScene.HalfShift) & RetainedScene.HalfBits;
-            if (hid == 0) lone.Add(key);
-            else pairs.Add((long)(hid - 1) << 32 | (uint)key);
+            if (hid == 0) { lone.Add((int)index[i] - 1); continue; }
+            if (hid - 1 < (uint)halves) { _halfKeyAt[hid]++; pairs++; }
         }
-        pairs.Sort();
-        _halfKeyAt = new int[halves + 1];
-        var keys = new List<int>();
-        int p = 0;
+        for (int h = 0; h < halves; h++) _halfKeyAt[h + 1] += _halfKeyAt[h];
+        if (_halfPairs.Length < pairs) _halfPairs = new int[pairs * 2];
+        var put = _halfKeyAt.AsSpan(0, halves).ToArray();
+        for (int i = 0; i + 2 < st.Length; i += 3)
+        {
+            if (index[i] == 0) continue;
+            uint hid = (st[i].Flags >> RetainedScene.HalfShift) & RetainedScene.HalfBits;
+            if (hid == 0 || hid - 1 >= (uint)halves) continue;
+            _halfPairs[put[hid - 1]++] = (int)index[i] - 1;
+        }
+        if (_keyStamp.Length < _mipKeys.Count) _keyStamp = new int[Math.Max(_mipKeys.Count, 1) * 2];
+        Array.Clear(_keyStamp);
+        var keys = new List<int>(pairs / 4 + 1);
+        int at = 0;
         for (int h = 0; h < halves; h++)
         {
+            int end = _halfKeyAt[h + 1];
             _halfKeyAt[h] = keys.Count;
-            long last = -1;
-            for (; p < pairs.Count && (pairs[p] >> 32) == h; p++)
-                if (pairs[p] != last) { keys.Add((int)(pairs[p] & 0xFFFFFFFF)); last = pairs[p]; }
+            for (; at < end; at++)
+            {
+                int k = _halfPairs[at];
+                if (_keyStamp[k] == h + 1) continue;
+                _keyStamp[k] = h + 1;
+                keys.Add(k);
+            }
         }
         _halfKeyAt[halves] = keys.Count;
         _halfKeys = keys.ToArray();
         _loneKeys = lone.ToArray();
     }
+
+    int[] _halfPairs = [], _keyStamp = [];
 
     int MipKey(in RetainedScene.Vertex v)
     {
