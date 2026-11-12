@@ -12,7 +12,7 @@ namespace Kf2.Shortcuts;
 /// that is out in its top right corner, an item hotkey its count in the bottom right.
 ///
 /// Laid out in the game's pixels to work at 240p: the cards are 28 x 42, a pixel apart,
-/// as wide together as the HP panel, their bevel two pixels a side narrower than the
+/// as wide together as the HP panel, their bevel BevelLess pixels a side narrower than the
 /// panel's for room inside; their digits and numerals are the menu's fonts at
 /// their own size. The margins are the panel's: its left edge, and its distance from the
 /// top as the distance from the bottom. They follow the panel to the screen's edge when
