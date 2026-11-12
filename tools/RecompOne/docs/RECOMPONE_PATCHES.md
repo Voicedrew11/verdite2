@@ -1862,6 +1862,20 @@ Four files in the directory have no entry below:
   water, where before they stood 30, and with only the subtracted pass drawn they
   were 106 *brighter* than the murk around them; 342 → 336 fps uncapped, the copy.
   **No recompile.** See "The HUD over the water" in Verdite3's `WATER.md`.
+  *Amended (2026-11-12), two ways the normal pass disagreed with the colour pass.*
+  `NormalFs` returned for a cover (id 3) before its transparent-texel test, so a
+  textured 2D letter's whole box covered the veil under it, and the present laid
+  the occlusion on that box at full share instead of the veil's: a faint square
+  round each HUD letter (KF2's HP and MP), plainest in motion. The test now comes
+  first, and a sprite overlay carries its texel too (`SurfaceTex`). And the pass
+  drew with no scissor, so a model cropped by a draw area (KF2's hand-card icons)
+  left its cropped-off part in the normal and surface buffers, a faint grey shape:
+  `AoGeometry` keeps each run's draw area (`Clips`, from `GlCore.TargetClip`, which
+  the colour pass's scissor now uses too) and `RenderSurfaces` scissors each run to
+  it. Measured in KF2 (fdat05, slot 2, a fixed camera, paused, AO on at 21:9): the
+  only pixels that change are the boxes round the "HP" and "MP" letters, 9151 of
+  them, brighter by 12 (RGB sum) where the occlusion under the panel is nonzero;
+  two runs of the fixed build are identical. The icon crop not measured.
 - `0100-radial-fog.patch` — the GTE's depth cue is a function of SZ, so the
   retained shaders, which recompute it per pixel, fogged a pixel at the side of the
   picture as if nearer than it is, and the fog moved as the view turned.

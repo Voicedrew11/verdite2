@@ -80,6 +80,17 @@ public sealed class AoGeometry
 
     public List<int> Breaks => _breaks;
 
+    /// <summary>A draw area in the target's own 1x pixels, inclusive, as the colour
+    /// pass scissors it.</summary>
+    public readonly record struct ClipRect(int X0, int Y0, int X1, int Y1);
+
+    // Where the draw area changes, as vertex indices: the normal pass scissors each
+    // run as the colour pass did, or a model cropped by a draw area (a hand card's
+    // icon) leaves its cropped-off part in the normal and surface buffers.
+    readonly List<(int At, ClipRect Rect)> _clips = new();
+
+    public List<(int At, ClipRect Rect)> Clips => _clips;
+
     /// <summary>0085. The retained scene's frame whose map the GPU drew into this
     /// target this frame (0 for none), and the projection centre it was drawn with,
     /// in the target's 1x pixels. The normal pass draws that map first.</summary>
@@ -112,12 +123,14 @@ public sealed class AoGeometry
         PreHud = false;
         _breaks.Clear();
         _inVeil = false;
+        _clips.Clear();
     }
 
-    public void Add(in V a, in V b, in V c)
+    public void Add(in V a, in V b, in V c, ClipRect clip)
     {
         if (_n + 3 > MaxVerts) { Dropped++; return; }
         if (_n + 3 > _v.Length) Array.Resize(ref _v, Math.Min(MaxVerts, _v.Length * 2));
+        if (_clips.Count == 0 || _clips[^1].Rect != clip) _clips.Add((_n, clip));
         bool veil = a.M >= SurfaceMaterial.VeilHalf;
         if (veil != _inVeil) { _breaks.Add(_n); _inVeil = veil; }
         _v[_n++] = a;

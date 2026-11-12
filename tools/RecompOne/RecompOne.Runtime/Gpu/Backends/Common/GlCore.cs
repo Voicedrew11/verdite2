@@ -1085,7 +1085,7 @@ public sealed partial class GlCore : IGpuBackend
                 if (!_kTarget.Geo.PreHud) CopyPreHud(_kTarget);
                 uint tex = VeilTex(f);
                 _kTarget.Geo.Add(VeilVert(a.X, a.Y, a.U, a.V, veil, tex), VeilVert(b.X, b.Y, b.U, b.V, veil, tex),
-                                 VeilVert(c.X, c.Y, c.U, c.V, veil, tex));
+                                 VeilVert(c.X, c.Y, c.U, c.V, veil, tex), TargetClip(_kTarget));
             }
             // 0068. The plane a planar reflection mirrors in is found here, from
             // the water the frame actually drew.
@@ -1104,7 +1104,7 @@ public sealed partial class GlCore : IGpuBackend
                 // no depth -- write no normal either (NormalFs).
                 uint tex = SurfaceTex(f);
                 _kTarget.Geo.Frame(_frame, GteDepth.Generation);
-                _kTarget.Geo.Add(GeoVert(a, gm, tex), GeoVert(b, gm, tex), GeoVert(c, gm, tex));
+                _kTarget.Geo.Add(GeoVert(a, gm, tex), GeoVert(b, gm, tex), GeoVert(c, gm, tex), TargetClip(_kTarget));
             }
         }
         if (lightGen >= 0) _kLightGen = lightGen;
@@ -1193,6 +1193,17 @@ public sealed partial class GlCore : IGpuBackend
     static AoGeometry.V VeilVert(float x, float y, float u, float v, float m, uint tex) =>
         new() { X = x, Y = y, M = m, Tu = u, Tv = v, Tex = tex };
 
+    /// <summary>The batch's draw area in <paramref name="rt"/>'s own 1x pixels,
+    /// inclusive: what the colour pass scissors to, and so what the normal pass
+    /// scissors the batch's kept triangles to. A draw area spanning the game's whole
+    /// width spans the widescreen margin too.</summary>
+    AoGeometry.ClipRect TargetClip(GlDisplayRt rt)
+    {
+        if (rt.Margin > 0 && _kClipX0 <= rt.X && _kClipX1 >= rt.X + rt.W - 1)
+            return new(0, _kClipY0 - rt.Y, rt.Wide1x - 1, _kClipY1 - rt.Y);
+        return new(_kClipX0 - rt.X + rt.Margin, _kClipY0 - rt.Y, _kClipX1 - rt.X + rt.Margin, _kClipY1 - rt.Y);
+    }
+
     /// <summary>0067. A 2D primitive over most of the target is a fade or a flash
     /// the world is seen through, not a piece of the HUD; it is not an overlay.</summary>
     bool CoversTarget(float x0, float y0, float x1, float y1) =>
@@ -1270,11 +1281,14 @@ public sealed partial class GlCore : IGpuBackend
             else SurfaceMaterial.Overlays += 2;
             if (f.SemiTrans && f.Textured) SurfaceMaterial.TexturedVeils += 2;
             _kTarget!.Geo.Frame(_frame, GteDepth.Generation);
-            uint tex = m == SurfaceMaterial.Overlay ? 0u : VeilTex(f);
+            // An overlay's texel too, so its transparent texels mark nothing (NormalFs):
+            // a letter's box would otherwise cover the veil under it.
+            uint tex = m == SurfaceMaterial.Overlay ? SurfaceTex(f) : VeilTex(f);
+            var clip = TargetClip(_kTarget);
             _kTarget.Geo.Add(VeilVert(a.X, a.Y, a.U, a.V, m, tex), VeilVert(b.X, b.Y, b.U, b.V, m, tex),
-                             VeilVert(c.X, c.Y, c.U, c.V, m, tex));
+                             VeilVert(c.X, c.Y, c.U, c.V, m, tex), clip);
             _kTarget.Geo.Add(VeilVert(b.X, b.Y, b.U, b.V, m, tex), VeilVert(d.X, d.Y, d.U, d.V, m, tex),
-                             VeilVert(c.X, c.Y, c.U, c.V, m, tex));
+                             VeilVert(c.X, c.Y, c.U, c.V, m, tex), clip);
         }
     }
 
@@ -1821,17 +1835,9 @@ public sealed partial class GlCore : IGpuBackend
             _gl.DepthMask(false);
         }
 
-        int clipX0, clipY0, clipX1, clipY1;
-        if (rt == null)
-        {
-            clipX0 = _kClipX0; clipY0 = _kClipY0; clipX1 = _kClipX1; clipY1 = _kClipY1;
-        }
-        else
-        {
-            clipX0 = _kClipX0 - rt.X + rt.Margin; clipY0 = _kClipY0 - rt.Y;
-            clipX1 = _kClipX1 - rt.X + rt.Margin; clipY1 = _kClipY1 - rt.Y;
-            if (rt.Margin > 0 && _kClipX0 <= rt.X && _kClipX1 >= rt.X + rt.W - 1) { clipX0 = 0; clipX1 = rt.Wide1x - 1; }
-        }
+        var (clipX0, clipY0, clipX1, clipY1) = rt == null
+            ? new AoGeometry.ClipRect(_kClipX0, _kClipY0, _kClipX1, _kClipY1)
+            : TargetClip(rt);
 
         int bx0 = (int)Math.Floor(_drawMinX) + (rt == null ? 0 : rt.Margin - rt.X);
         int by0 = (int)Math.Floor(_drawMinY) - (rt == null ? 0 : rt.Y);
@@ -3123,17 +3129,20 @@ public sealed partial class GlCore : IGpuBackend
         // (uVeilPass 1), then a textured one's opaque texels as an overlay (2).
         // A veil's texel and a textured surface's both come from sample VRAM.
         var breaks = src.Geo.Breaks;
+        // Each run scissored to the draw area the colour pass drew it in.
+        var clips = src.Geo.Clips;
         _gl.ActiveTexture(TextureUnit.Texture0);
         _gl.BindTexture(TextureTarget.Texture2D, _vram.SampleTexture);
         // 0085. The map's water goes in where the colour pass drew it among the list.
         var water = world && _wnReady ? src.Geo.Water : null;
-        int start = 0, bi = 0, wi = 0;
+        int start = 0, bi = 0, wi = 0, ci = 0;
         int armAt = world && _wnReady ? src.Geo.ArmAt : -1;
         bool veil = false;
         for (;;)
         {
             for (; water != null && wi < water.Count && water[wi].At <= start; wi++)
             {
+                _gl.Disable(EnableCap.ScissorTest);
                 if (src.Surface != 0) _gl.Disable(EnableCap.Blend, 1);
                 _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
                 DrawWorldWaterNormals(water[wi].Lo, water[wi].Hi);
@@ -3147,6 +3156,7 @@ public sealed partial class GlCore : IGpuBackend
             if (armAt >= 0 && armAt <= start)
             {
                 armAt = -1;
+                _gl.Disable(EnableCap.ScissorTest);
                 if (src.Surface != 0) _gl.Disable(EnableCap.Blend, 1);
                 _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
                 DrawArmNormals(src);
@@ -3162,6 +3172,10 @@ public sealed partial class GlCore : IGpuBackend
             if (bi < breaks.Count) end = Math.Min(end, breaks[bi]);
             if (water != null && wi < water.Count) end = Math.Min(end, water[wi].At);
             if (armAt > start) end = Math.Min(end, armAt);
+            for (; ci + 1 < clips.Count && clips[ci + 1].At <= start; ci++) { }
+            if (ci + 1 < clips.Count) end = Math.Min(end, clips[ci + 1].At);
+            if (ci < clips.Count) ScissorRun(clips[ci].Rect, scale);
+            else _gl.Disable(EnableCap.ScissorTest);
             if (veil)
             {
                 if (src.Surface != 0) _gl.Enable(EnableCap.Blend, 1);
@@ -3176,11 +3190,21 @@ public sealed partial class GlCore : IGpuBackend
             start = end;
         }
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        _gl.Disable(EnableCap.ScissorTest);
         _gl.Disable(EnableCap.Blend);
         if (world && _uNrmDepthCull >= 0) _gl.Uniform1(_uNrmDepthCull, 0);
         if (RetainedScene.SurfaceCheck && src.Surface != 0) CheckSurfaces(src);
         AoGeometry.Passes++;
         return true;
+    }
+
+    /// <summary>The normal pass's scissor for a run of kept triangles: their draw
+    /// area at the normal target's scale.</summary>
+    void ScissorRun(AoGeometry.ClipRect r, int scale)
+    {
+        _gl.Enable(EnableCap.ScissorTest);
+        _gl.Scissor(r.X0 * scale, r.Y0 * scale,
+            (uint)Math.Max(0, (r.X1 - r.X0 + 1) * scale), (uint)Math.Max(0, (r.Y1 - r.Y0 + 1) * scale));
     }
 
     /// <summary>0067. Whether a reflection pass can run: the setting, the program,

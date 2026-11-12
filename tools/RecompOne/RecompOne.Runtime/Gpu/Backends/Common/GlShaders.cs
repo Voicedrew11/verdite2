@@ -663,19 +663,22 @@ internal static class GlShaders
             // opacity is the draw's and not a guess from the id.
             bool opaque = vM < 255.5;
             float id = opaque ? vM : vM - 256.0;
-            // 0067. The HUD and anything else 2D: no normal and no depth, only the
-            // fact that it covers what is under it.
-            if (id > 2.5 && id < 3.5) { oColor = vec4(0.0); oSurface = vec4(0.0, 0.0, 0.0, id); return; }
             // A textured surface's transparent texel drew nothing and wrote no
             // depth, so it is no surface here either: a billboard's box would
             // otherwise lay its own normal over the wall the depth buffer holds.
             // The texel is PrimFs's centre tap, truncated the way it rounds.
+            // Taken before the HUD's cover below, or a letter's whole box covered
+            // the see-through panel under it, and the present shaded that box as
+            // no veil: a faint square round each letter, plainest in motion.
             if ((vTex & 0x80000000u) != 0u) {
                 ivec2 tc = ivec2(dUvx.x < 0.0 ? int(ceil(vUv.x - 0.0001)) : int(floor(vUv.x + 0.0001)),
                                  dUvy.y < 0.0 ? int(ceil(vUv.y - 0.0001)) : int(floor(vUv.y + 0.0001)));
                 vec4 t = veilTexel(tc);
                 if (t.rgb == vec3(0.0) && t.a < 0.5) discard;
             }
+            // 0067. The HUD and anything else 2D: no normal and no depth, only the
+            // fact that it covers what is under it.
+            if (id > 2.5 && id < 3.5) { oColor = vec4(0.0); oSurface = vec4(0.0, 0.0, 0.0, id); return; }
             if (z <= 0.0) { oColor = vec4(0.0); oSurface = vec4(0.0); return; }
             if (uZSlice.y > 0.0 && (z <= uZSlice.x || z > uZSlice.y)) discard;
             if (uDepthCull != 0) {
