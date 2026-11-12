@@ -4107,7 +4107,7 @@ swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
   axes**: the dagger lies diagonally in its own X-Y plane (x -289..269, y -167..210, z
   -32..32), so standing it on its bounding box's longest axis laid every blade 27 degrees
   off level with its guard off the card (reported from play; the drawn vertices matched
-  the GTE's to a pixel, so the transform was right and the pose wrong). It is then and laid along the
+  the GTE's to a pixel, so the transform was right and the pose wrong). It is then laid along the
   card's own diagonal (not 45 degrees: the card is tall); a blade's wide end (the guard)
   goes bottom left and its point runs off the top right, and the morning star, the battle
   hammer and the crescent axe (ids 3, 4, 6, whose wide end is the head) the other way
