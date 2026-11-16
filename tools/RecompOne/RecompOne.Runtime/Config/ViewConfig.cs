@@ -134,6 +134,12 @@ public class ViewConfig
         set => SetBool("Downsample", value);
     }
 
+    public bool Crt
+    {
+        get => GetBool("Crt");
+        set => SetBool("Crt", value);
+    }
+
     public bool VSync
     {
         get => GetBool("VSync");

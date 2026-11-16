@@ -114,6 +114,8 @@ public sealed partial class GlCore : IGpuBackend
     // pixels, and the size the Output panel draws the picture at.
     uint _dsBoxProg, _dsUpProg, _dsBoxTex, _dsBoxFbo, _dsUpTex, _dsUpFbo;
     int _uDsFactor = -1, _uDsSrcSize = -1, _uDsOutSize = -1;
+    uint _dsCrtProg;
+    int _uCrtSrcSize = -1, _uCrtOutSize = -1;
     int _dsBoxW, _dsBoxH, _dsUpW, _dsUpH;
     bool _dsFailed;
     int _postW, _postH, _postVersion = -1;
@@ -2871,6 +2873,15 @@ public sealed partial class GlCore : IGpuBackend
             _gl.Uniform1(_gl.GetUniformLocation(_dsUpProg, "uSrc"), 0);
             _uDsSrcSize = _gl.GetUniformLocation(_dsUpProg, "uSrcSize");
             _uDsOutSize = _gl.GetUniformLocation(_dsUpProg, "uOutSize");
+            _dsCrtProg = GlShaders.Build(_gl, GlShaders.FullscreenVs, GlShaders.DownsampleCrtFs, "downsample-crt", out string? crtError);
+            if (_dsCrtProg == 0) Console.WriteLine($"[gpu-ds] crt: {crtError}");
+            else
+            {
+                _gl.UseProgram(_dsCrtProg);
+                _gl.Uniform1(_gl.GetUniformLocation(_dsCrtProg, "uSrc"), 0);
+                _uCrtSrcSize = _gl.GetUniformLocation(_dsCrtProg, "uSrcSize");
+                _uCrtOutSize = _gl.GetUniformLocation(_dsCrtProg, "uOutSize");
+            }
             (_dsBoxTex, _dsBoxFbo) = DownsampleTarget();
             (_dsUpTex, _dsUpFbo) = DownsampleTarget();
         }
@@ -2900,10 +2911,11 @@ public sealed partial class GlCore : IGpuBackend
 
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _dsUpFbo);
         _gl.Viewport(0, 0, (uint)outW, (uint)outH);
-        _gl.UseProgram(_dsUpProg);
+        bool crt = GlVram.Crt && _dsCrtProg != 0;
+        _gl.UseProgram(crt ? _dsCrtProg : _dsUpProg);
         _gl.BindTexture(TextureTarget.Texture2D, _dsBoxTex);
-        _gl.Uniform2(_uDsSrcSize, (float)w1x, h1x);
-        _gl.Uniform2(_uDsOutSize, (float)outW, outH);
+        _gl.Uniform2(crt ? _uCrtSrcSize : _uDsSrcSize, (float)w1x, h1x);
+        _gl.Uniform2(crt ? _uCrtOutSize : _uDsOutSize, (float)outW, outH);
         _gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
         return true;
     }

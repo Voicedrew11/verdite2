@@ -877,6 +877,7 @@ public static class HostWindow
 
         Hle.GlVram.Scale = ConfigManager.View.RenderScale;
         Hle.GlVram.Downsample = ConfigManager.View.Downsample;
+        Hle.GlVram.Crt = ConfigManager.View.Crt;
         _glBackend = (Hle.GlCore)Hle.GpuBackendFactory.Create(_gl,
             Hle.GpuBackendFactory.Parse(ConfigManager.View.GpuBackend));
         _glBackend.InitGl();
