@@ -97,6 +97,14 @@ public static class PortSettings
         Stored = Stored.Float, Ui = Ui.None,
     };
 
+    /// <summary>The runtime's downsample (0115): the scaled picture averaged back to
+    /// 240 lines and scaled evenly to the window. Dimmed at 240P, which has nothing
+    /// to average. The runtime's own key, as <see cref="Resolution"/>'s is.</summary>
+    public static readonly PortSetting Downsample = Switch("Downsample", "KF2_DOWNSAMPLE", "Downsample to 240 lines",
+        DisplayPage, "DOWNSAMPLE", () => RecompOne.Runtime.Hle.GlVram.Downsample, v => RecompOne.Runtime.Hle.GlVram.Downsample = v, false,
+        tip: "Renders at the chosen resolution, then averages it back to the original 240 lines: smooth edges that keep the PSX's pixels.",
+        usable: () => Resolution.Live() > 1);
+
     static readonly double[] Aspects = [.. Widescreen.Presets.Select(p => (double)p.Ratio)];
 
     /// <summary>The four presets <see cref="Widescreen.Presets"/> offers, in its order.</summary>
@@ -524,7 +532,7 @@ public static class PortSettings
     /// <summary>The game's page, in order. Each row is one setting or a combined row.</summary>
     public static readonly PortSetting[] Menu =
     [
-        Display, Resolution, Aspect, HudAnchor, FrameRateRow,
+        Display, Resolution, Downsample, Aspect, HudAnchor, FrameRateRow,
         TextureFilter, PerPixel, AmbientOcclusionRow, ShadingRow,
         RenderDist, FogMode, Water,
         Language, Font, AutoReloadOn, GearCompareOn, CursorMemoryOn, NpcDialogueOn, EnemyTurnSpeed,
@@ -536,7 +544,7 @@ public static class PortSettings
     /// <c>settings</c> verb and the start-up check read.</summary>
     public static readonly PortSetting[] All =
     [
-        Display, Resolution, Aspect, HudAnchor, FrameRate, Smoothing,
+        Display, Resolution, Downsample, Aspect, HudAnchor, FrameRate, Smoothing,
         Mipmaps, Anisotropy, PerPixel, Ao, AoQuality, NoDitherOn, TrueColorOn,
         RenderDist, FogMode, MurkyWater, WaterWaves, Planar,
         Language, Font, AutoReloadOn, GearCompareOn, CursorMemoryOn, ShortcutsOn, NpcDialogueOn, EnemyTurnSpeed, FocusPauseOn,

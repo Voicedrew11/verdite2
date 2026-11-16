@@ -37,6 +37,7 @@ static class JapanesePortText
         ["FULLSCREEN"] = "フルスクリーン",
         ["BORDERLESS"] = "ボーダーレス",
         ["RESOLUTION"] = "かいぞうど",
+        ["DOWNSAMPLE"] = "ダウンサンプル",
         ["ASPECT"] = "アスペクト",
         ["HUD AT EDGES"] = "HUDをはしに",
         ["FRAME RATE"] = "フレームレート",
