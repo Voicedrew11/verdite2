@@ -24,7 +24,10 @@ public static partial class PolyAssembler
     /// <summary>Set while the first-person arm draws.</summary>
     public static bool InArm;
 
-    /// <summary>Set while func_800346CC draws a menu's item model.</summary>
+    /// <summary>Set while a model is shown over the world rather than in it: the menu
+    /// preview (<c>func_800346CC</c>) and a picked-up item (<see cref="ItemEye.Drawing"/>).
+    /// Both are linked in front, and a depth test puts them inside the pedestal or
+    /// barrel they were taken from.</summary>
     public static bool InPreview;
 
     /// <summary>Set while func_80032588 submits a model. A blended packet of a door
