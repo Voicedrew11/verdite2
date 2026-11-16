@@ -318,6 +318,9 @@ public static class RetainedScene
     /// Off, the underside of every floor above a plane is reflected.</summary>
     public static bool CullBack = true;
 
+    /// Model pixels behind a nearby wall are drawn on it (PrimFs's bury test).
+    public static bool Bury = true;
+
     /// <summary>The probe's switch: GPU time per draw, read back with a query.</summary>
     public static bool Probe;
 
@@ -1178,6 +1181,9 @@ public static class RetainedScene
         /// <summary>A blended model that stands for something solid (a door): its blended
         /// faces hide what is behind them from the occlusion pass with every texel.</summary>
         public bool Solid;
+        /// <summary>A door or a secret wall: it sits in the wall it slides through, so
+        /// its hidden faces are never pulled onto that wall (PrimFs's bury test).</summary>
+        public bool Door;
         /// <summary>The store's generation when it was added; the backend draws none
         /// from an emptied store.</summary>
         public int MeshGen;

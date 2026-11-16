@@ -362,6 +362,7 @@ public sealed partial class GlCore
         if (_uwModelRgbc >= 0) _gl.Uniform1(_uwModelRgbc, m.Rgbc);
         if (_uwModelMat >= 0) _gl.Uniform1(_uwModelMat, m.Material);
         if (_uwModelKeep >= 0) _gl.Uniform1(_uwModelKeep, 1f - Math.Clamp(m.FadeOut, 0f, 1f));
+        if (_uwOtzBury >= 0) _gl.Uniform1(_uwOtzBury, RetainedScene.Bury && !m.Door ? OtzBury : 0f);
         if (_uwBk >= 0) _gl.Uniform3(_uwBk, m.Bk0, m.Bk1, m.Bk2);
         if (_uwLcmR >= 0) _gl.Uniform3(_uwLcmR, m.L0, m.L1, m.L2);
         if (_uwLcmG >= 0) _gl.Uniform3(_uwLcmG, m.L3, m.L4, m.L5);
