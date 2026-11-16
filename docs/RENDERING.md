@@ -3972,7 +3972,7 @@ console's own pixel grid too. Dimmed at 240P, where a block is one sample.
 
 Measured at 8x on a 3840x2160 fullscreen: the snap is 3840x2160, 9x9 squares of a
 428x240 picture, against the 3424x1920 target with the setting off. The
-mechanism is `tools/RecompOne/patches/0115`. GL 3.3 and up; the 2.1 context
+mechanism is `tools/RecompOne/patches/0129`. GL 3.3 and up; the 2.1 context
 keeps the plain present.
 
 ## A shop overwrote the textures with the atlas's old texels

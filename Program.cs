@@ -1037,7 +1037,7 @@ RecompOne.Runtime.Hle.GlVram.SnapshotProbe =
 if (!RecompOne.Runtime.Hle.GlVram.Snapshots)
     Console.WriteLine("[KF2] vram snapshots: off (a menu restores the frame at 1x)");
 
-// The runtime's box downsample (0115). Its saved key is read when the window comes
+// The runtime's box downsample (0129). Its saved key is read when the window comes
 // up, which is before the runtime is ready, so the run's override goes on after:
 //
 //     KF2_DOWNSAMPLE=1      the scaled picture averaged back to 240 lines

@@ -97,7 +97,7 @@ public static class PortSettings
         Stored = Stored.Float, Ui = Ui.None,
     };
 
-    /// <summary>The runtime's downsample (0115): the scaled picture averaged back to
+    /// <summary>The runtime's downsample (0129): the scaled picture averaged back to
     /// 240 lines and scaled evenly to the window. Dimmed at 240P, which has nothing
     /// to average. The runtime's own key, as <see cref="Resolution"/>'s is.</summary>
     public static readonly PortSetting Downsample = Switch("Downsample", "KF2_DOWNSAMPLE", "Downsample to 240 lines",
