@@ -68,6 +68,15 @@ public sealed class ShortcutsPage : IPatchPage
         }
         Tip("Keyboard keys also renames the Equipment page's Select button row to Hotkeys.");
 
+        bool fade = CrossFeedback.FadeWhenIdle;
+        if (ImGui.Checkbox("Fade when idle", ref fade))
+        {
+            CrossFeedback.FadeWhenIdle = fade;
+            PatchSettings.Set(Sc.FadeKey, fade);
+        }
+        Tip("The hands and hotkey cards dim and turn see-through after a few seconds without a press, " +
+            "and come back at once on the next one.");
+
         TakeCapturedKey();
         for (int i = 0; i < Sc.KeyRows; i++) DrawKeyRow(i);
         PatchSettings.Note("The pad's own Select button always uses hotkey 1. With no key for hotkey 1, " +

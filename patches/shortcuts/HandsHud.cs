@@ -55,6 +55,22 @@ static class HandsHud
         HandsIcons.Want(c, m, MagicIcon, SpellCrystals.Crystal(m.ReadU8(Hands.AttackSpell)), probe);
         var (spell, item) = Labels.Held(m, Shortcuts.Hotkey);
         HandsIcons.Want(c, m, HotkeyIcon, spell != Shortcuts.None ? SpellCrystals.Crystal(spell) : item, probe);
+        Notice(m);
+    }
+
+    /// <summary>What each card shows, for <see cref="CrossFeedback"/>'s pulse: the id and
+    /// the level or count drawn on it, and for the hotkey which one is current.</summary>
+    static void Notice(IMemory m)
+    {
+        byte weapon = m.ReadU8(Hands.Weapon), spell = m.ReadU8(Hands.AttackSpell);
+        var (hSpell, hItem) = Labels.Held(m, Shortcuts.Hotkey);
+        ulong spellLevel = spell != Shortcuts.None ? (ulong)SpellCrystals.Level(m, spell) : 0;
+        ulong hotkeyLevel = hSpell != Shortcuts.None ? (ulong)SpellCrystals.Level(m, hSpell) : 0;
+        ulong count = hItem != Shortcuts.None ? (ulong)m.ReadU8(Hands.Inventory + hItem) : 0;
+        CrossFeedback.Notice(CrossFeedback.Card.Weapon, weapon);
+        CrossFeedback.Notice(CrossFeedback.Card.Magic, spell | spellLevel << 8);
+        CrossFeedback.Notice(CrossFeedback.Card.Hotkey,
+            (ulong)Shortcuts.Hotkey | (ulong)hSpell << 8 | (ulong)hItem << 16 | hotkeyLevel << 24 | count << 32);
     }
 
     /// <summary>The cross, in the HUD builder's post-hook. Drawn as the HUD is drawn:
@@ -74,6 +90,7 @@ static class HandsHud
     {
         uint d = m.ReadU32(Descriptor);
         if (!HasRoom(m, d)) return;
+        CrossFeedback.BeginFrame();
 
         uint panel = Stage13.HudRecords + CardFrame.PanelRecord * Stage13.HudStride;
         int left = Widescreen.AnchoredHudX(Widescreen.NativeHudX(m, CardFrame.PanelRecord));
@@ -83,25 +100,35 @@ static class HandsHud
 
         byte weapon = m.ReadU8(Hands.Weapon), spell = m.ReadU8(Hands.AttackSpell);
         var (hSpell, hItem) = Labels.Held(m, Shortcuts.Hotkey);
+        var magic = CrossFeedback.LookOf(CrossFeedback.Card.Magic);
+        var hotkey = CrossFeedback.LookOf(CrossFeedback.Card.Hotkey);
+        var hand = CrossFeedback.LookOf(CrossFeedback.Card.Weapon);
 
         // The frames first: the lit assembler links them at the panel's depth, behind
         // the models at its contents' depth.
-        Frame(c, m, d, magicX, handsY);
-        Frame(c, m, d, hotkeyX, hotkeyY);
-        Frame(c, m, d, weaponX, handsY);
+        Frame(c, m, d, magicX, handsY, CrossFeedback.FrameLookOf(CrossFeedback.Card.Magic));
+        Frame(c, m, d, hotkeyX, hotkeyY, CrossFeedback.FrameLookOf(CrossFeedback.Card.Hotkey));
+        Frame(c, m, d, weaponX, handsY, CrossFeedback.FrameLookOf(CrossFeedback.Card.Weapon));
         if (!HasRoom(m, d)) return;
 
         int z = (short)m.ReadU16(ContentDepth);
-        if (spell != Shortcuts.None) Icon(c, m, d, MagicIcon, SpellCrystals.Crystal(spell), magicX, handsY, z);
-        if (weapon != Shortcuts.None) Icon(c, m, d, WeaponIcon, weapon, weaponX, handsY, z);
-        if (hSpell != Shortcuts.None) Icon(c, m, d, HotkeyIcon, SpellCrystals.Crystal(hSpell), hotkeyX, hotkeyY, z);
-        else if (hItem != Shortcuts.None) Icon(c, m, d, HotkeyIcon, hItem, hotkeyX, hotkeyY, z);
+        if (spell != Shortcuts.None) Icon(c, m, d, MagicIcon, SpellCrystals.Crystal(spell), magicX, handsY, z, magic);
+        if (weapon != Shortcuts.None) Icon(c, m, d, WeaponIcon, weapon, weaponX, handsY, z, hand);
+        if (hSpell != Shortcuts.None) Icon(c, m, d, HotkeyIcon, SpellCrystals.Crystal(hSpell), hotkeyX, hotkeyY, z, hotkey);
+        else if (hItem != Shortcuts.None) Icon(c, m, d, HotkeyIcon, hItem, hotkeyX, hotkeyY, z, hotkey);
         if (!HasRoom(m, d)) return;
 
+        uint from = Cursor(m, d);
         if (spell != Shortcuts.None) Numeral(m, magicX, handsY, SpellCrystals.Level(m, spell));
+        CrossFeedback.Tint(m, from, Cursor(m, d), magic);
+        from = Cursor(m, d);
         if (hSpell != Shortcuts.None) Numeral(m, hotkeyX, hotkeyY, SpellCrystals.Level(m, hSpell));
         else if (hItem != Shortcuts.None) Count(m, hotkeyX, hotkeyY, m.ReadU8(Hands.Inventory + hItem));
+        CrossFeedback.Tint(m, from, Cursor(m, d), hotkey);
     }
+
+    /// <summary>Where the frame's buffer has got to: the next packet goes here.</summary>
+    static uint Cursor(IMemory m, uint d) => m.ReadU32(d + 8);
 
     /// <summary>Room left in the frame's primitive buffer for everything the cross adds;
     /// also brings the menu's mirror of the cursor up to the frame's, which the model
@@ -114,10 +141,14 @@ static class HandsHud
         return true;
     }
 
-    static void Frame(CpuContext c, IMemory m, uint d, int x, int y)
+    /// <summary>A card's frame, a pixel larger a side while <paramref name="look"/> grows it.</summary>
+    static void Frame(CpuContext c, IMemory m, uint d, int x, int y, CrossFeedback.Look look)
     {
         if (!HasRoom(m, d)) return;
-        CardFrame.Draw(c, m, x, y, CardWidth, CardHeight, BevelLess);
+        uint from = Cursor(m, d);
+        int g = look.Grow;
+        CardFrame.Draw(c, m, x - g, y - g, CardWidth + 2 * g, CardHeight + 2 * g, BevelLess);
+        CrossFeedback.Tint(m, from, Cursor(m, d), look);
     }
 
     /// <summary>The inside of a card at (x, y): the frame less its bevel.</summary>
@@ -129,11 +160,13 @@ static class HandsHud
 
     /// <summary>The model of <paramref name="item"/> posed large in the inside and cropped
     /// by it; nothing until the model has been read.</summary>
-    static void Icon(CpuContext c, IMemory m, uint d, int slot, byte item, int x, int y, int z)
+    static void Icon(CpuContext c, IMemory m, uint d, int slot, byte item, int x, int y, int z, CrossFeedback.Look look)
     {
         if (!HandsIcons.Ready(slot, item) || !HasRoom(m, d)) return;
+        uint from = Cursor(m, d);
         var (ix, iy, iw, ih) = Inside(x, y);
         HandsIcons.Draw(c, m, slot, ix, iy, iw, ih, z);
+        CrossFeedback.Tint(m, from, Cursor(m, d), look);
     }
 
     /// <summary>A count, right-aligned in the inside's bottom right corner.</summary>

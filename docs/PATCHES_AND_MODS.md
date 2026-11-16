@@ -3907,7 +3907,8 @@ change: the weapon's id at `0x801994AF` and seven armour ids at
 candidate's id (its `A3`; `0xFF` is "take it off") into its slot byte, runs
 `func_800244CC`, reads the nineteen words, and puts the slot byte and all
 nineteen words back. The real equip calls (`func_80026210`, `func_80025FD0`) are
-never made; the weapon one also loads a model and plays a sound. See "Nineteen of
+never made; the weapon one also loads a model (it plays no sound: see "The cross fades
+when idle, and answers a press"). See "Nineteen of
 those words are a cache, and `func_800244CC` owns all of them" in
 [GAME_INTERNALS.md](GAME_INTERNALS.md).
 
@@ -4175,6 +4176,61 @@ Snapped 2026-11-11 (`snap`, windowed, HUD anchored): the textures are in VRAM in
 WIND I, EARTH IV, LIGHT II, DARK I and FIRE I crystals, the BLOOD STONE, the dagger
 and the short sword (after the spread fix) each fill their box with the numerals and
 slot numbers clear of them; the name line in the full-size menu font.
+
+### The cross fades when idle, and answers a press
+
+`CrossFeedback` (`patches/shortcuts/CrossFeedback.cs`), 2026-11-16. **Measured headless,
+not judged by eye or ear.**
+
+- **Idle fade.** 4 s after the last press or change the cross dims over 0.5 s to 0.8
+  and then turns see-through. The PS1 has no alpha to step smoothly: a face is opaque
+  or blended in one of four fixed modes, and on a textured face only the texels with
+  the STP bit set blend at all. So the last step is blend mode 0 (half and half) on
+  every face the game draws opaque: the item models' `POLY_GT3` / `POLY_FT3` and the
+  digits' `POLY_FT4`. The card frames are the HP panel's own `POLY_GT4` and already
+  blended (`0x3E`), so they keep their blend mode and are only dimmed. Any press, any
+  change to a card, or the HUD returning after 1 s away (a menu, a load, a message)
+  brings it back solid at once. Gameplay ▸ Shortcuts ▸ *Fade when idle* (on,
+  `kf2.shortcuts.fade`), `KF2_SHORTCUTS_FADE`.
+- **A card that changes pulses**: brighter by half and a pixel larger a side, easing
+  back over 150 ms. A change is noticed from what the card shows (id, level, count,
+  and the current hotkey), so a swap, a step, an item used up and an equip in the
+  menu all pulse the same way. A new game, a death reset or a card load does not.
+- **A press that does nothing** (an empty hand's other slot, no other hotkey to step
+  to, an empty hotkey used) flashes the background of the card it was for (its frame:
+  red up by 0.8, green and blue down by half, fading over 250 ms) and plays sound
+  `0x12`. A first cut shook the whole cross 2 px instead; the user asked for the flash.
+  The user auditioned the game's other sounds for it (2026-11-16) and kept `0x12`: the
+  rest were worse. `KF2_SHORTCUTS_REFUSE=<id>[,<vol>]` (hex) picks another, and the shell's `hands sound:ID[,VOL]` plays any id at the next
+  control tick, to choose one by ear. The ids the game's own code plays: `0x03` and a
+  computed one in the bow `func_800271D0`, `0x0B` the death latch, `0x0C` from
+  `func_8002851C` at a volume set by an impact's size, `0x0D` and `0x10`-`0x12` the menu,
+  `0x14` stage 2, and `0x1B`, `0x23`, `0x2B`, `0x40` elsewhere. Every id `0x00`-`0x5F`
+  played headless without a fault.
+  A swap or a step plays `0x10`. Both are the menu's own: `func_80022DC4(id)` plays
+  `0x10`-`0x12` as `func_800142F4(id, 0x30, 0x30, 0)`, and the list cursor
+  `func_8001EB70` plays `0x10` on a step and `0x12` on a back out. The port calls
+  `func_800142F4` directly, not `func_80022DC4`, which also advances the music
+  sequence a tick (`SsSeqCalledTbyT`). **The weapon equip `func_80026210` plays no
+  sound**: the voice table at `0x801989B0` was byte for byte the same across both
+  swaps, and its body calls only the disc read, the model set and the stats.
+- **How it is applied.** After each part of the cross is drawn, the packets it put in
+  the frame's buffer (from the descriptor's cursor before to after) are walked by
+  their length byte and recoloured in place. Anything that is not a polygon or a
+  sprite is stepped over (the icons' `E3` draw-area packets). Measured, every range
+  parsed to its end: the frames 8 × `3E/12`, an icon `34/9` and `24/7` faces then
+  four `E3/2`.
+
+Measured 2026-11-16, slot 2 in fdat05, `KF2_SHORTCUTS=1 KF2_SHORTCUTS_PROBE=1` through
+`KF2_SHELL`: `cross faded` 4.5 s after the last press; `hands weapon` gave `stepped,
+sound 0x10`, `Weapon card pulses (1 -> 0)` and `cross solid`, and back again;
+`hands spell` and `hands next` with nothing to go to gave `Magic refused, flash and
+sound 0x12` and `Hotkey refused, ...`, `hands weapon` with nothing put away `Weapon
+refused, ...`. Windowed with `KF2_AUDIO_PROBE=1`, six refusals took the live voices
+from 8 to 10 and back to 8 once they ended. This fits the sound being keyed, but it
+was not heard. `python3 scripts/fuzz.py --runs 12 --env KF2_SHORTCUTS=1`: 0 findings.
+**Not judged**: the dimmed and see-through look, the pulse, the red flash, and whether the
+two sounds are the right ones and loud enough.
 
 ## NPC dialogue
 

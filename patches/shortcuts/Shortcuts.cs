@@ -21,6 +21,8 @@ namespace Kf2.Shortcuts;
 ///
 ///     KF2_SHORTCUTS=0|1       off or on for the run (Gameplay ▸ Shortcuts)
 ///     KF2_SHORTCUTS_PROBE=1   a line for each assignment, swap, hotkey used and card load
+///     KF2_SHORTCUTS_FADE=0|1  the cross fades when idle, or stays solid (Gameplay ▸ Shortcuts)
+///     KF2_SHORTCUTS_REFUSE=0C[,60]  the refusal's sound id and volume, in hex (12,30: the menu's cancel)
 ///
 /// ---- the game's own shortcut ----
 ///
@@ -103,6 +105,7 @@ public static class Shortcuts
     const string Owner = "kf2.shortcuts";
     public const string OnKey = "kf2.shortcuts.on";
     public const string LabelsKey = "kf2.shortcuts.labels";
+    public const string FadeKey = "kf2.shortcuts.fade";
     public const string WeaponKeyKey = "kf2.shortcuts.keyweapon";
     public const string SpellKeyKey = "kf2.shortcuts.keyspell";
     public static string KeyKey(int i) => $"kf2.shortcuts.key{i + 1}";
@@ -174,7 +177,7 @@ public static class Shortcuts
     const int NoPicker = -2, Back = -1;
     static int _decision = NoPicker;
 
-    static bool _fromEnv, _probe;
+    static bool _fromEnv, _fadeFromEnv, _probe;
 
     static readonly ModInfo _self = new()
     {
@@ -184,9 +187,22 @@ public static class Shortcuts
         Description = "Five Select shortcuts, each holding an item or a spell.",
     };
 
-    public static void Configure(string? env, string? probe)
+    public static void Configure(string? env, string? probe, string? fade, string? refuse)
     {
+        if (!string.IsNullOrWhiteSpace(refuse))
+        {
+            if (CrossFeedback.TryParseSound(refuse, out var sound)) CrossFeedback.RefuseSound = sound;
+            else Console.WriteLine($"[KF2] shortcuts: KF2_SHORTCUTS_REFUSE is a hex sound id and optional ,volume, not '{refuse}'; ignored");
+        }
         _probe = probe == "1";
+        CrossFeedback.Probe = _probe;
+        if (fade is "0" or "1")
+        {
+            CrossFeedback.FadeWhenIdle = fade == "1";
+            _fadeFromEnv = true;
+        }
+        else if (!string.IsNullOrWhiteSpace(fade))
+            Console.WriteLine($"[KF2] shortcuts: KF2_SHORTCUTS_FADE is 0 or 1, not '{fade}'; ignored");
         if (string.IsNullOrWhiteSpace(env)) return;
         if (env is "0" or "1")
         {
@@ -204,6 +220,7 @@ public static class Shortcuts
             var view = RecompOne.Runtime.Runtime.View;
             if (!_fromEnv) Enabled = view.GetBool(OnKey, Enabled);
             KeyboardLabels = view.GetString(LabelsKey, "keyboard") != "controller";
+            if (!_fadeFromEnv) CrossFeedback.FadeWhenIdle = view.GetBool(FadeKey, CrossFeedback.FadeWhenIdle);
             for (int i = 0; i < Count; i++) Keys[i] = ReadKey(view.GetString(KeyKey(i), DefaultKeys[i].ToString()));
             WeaponKey = ReadKey(view.GetString(WeaponKeyKey, WeaponKey.ToString()));
             SpellKey = ReadKey(view.GetString(SpellKeyKey, SpellKey.ToString()));
@@ -384,14 +401,31 @@ public static class Shortcuts
         PadLayout.Rewrite(m);
         Hands.Tick(c, m, _probe);
 
+        int audition = Interlocked.Exchange(ref _shellSound, -1);
+        if (audition >= 0) CrossFeedback.Audition(c, m, ((uint)audition >> 8, (uint)audition & 0xFF));
+
         int asked = Interlocked.Exchange(ref _shellPress, -1);
         if (asked >= 0) TakeShellAway(m);
         bool Asked(PadLayout.Press p) => asked == (int)p;
 
-        if (PadLayout.Take(PadLayout.Press.SwapWeapon) > 0 | Fired(WeaponRow) | Asked(PadLayout.Press.SwapWeapon)) Hands.SwapWeapon(c, m, _probe);
-        if (PadLayout.Take(PadLayout.Press.SwapSpell) > 0 | Fired(SpellRow) | Asked(PadLayout.Press.SwapSpell)) Hands.SwapSpell(m, _probe);
-        Cycle(m, PadLayout.Take(PadLayout.Press.NextHotkey) - PadLayout.Take(PadLayout.Press.PreviousHotkey)
-                 + (Asked(PadLayout.Press.NextHotkey) ? 1 : 0) - (Asked(PadLayout.Press.PreviousHotkey) ? 1 : 0));
+        // A swap or a step plays the menu's cursor sound, a press that does nothing its cancel.
+        if (PadLayout.Take(PadLayout.Press.SwapWeapon) > 0 | Fired(WeaponRow) | Asked(PadLayout.Press.SwapWeapon))
+        {
+            if (Hands.SwapWeapon(c, m, _probe)) CrossFeedback.Stepped(c, m);
+            else CrossFeedback.Refused(c, m, CrossFeedback.Card.Weapon);
+        }
+        if (PadLayout.Take(PadLayout.Press.SwapSpell) > 0 | Fired(SpellRow) | Asked(PadLayout.Press.SwapSpell))
+        {
+            if (Hands.SwapSpell(m, _probe)) CrossFeedback.Stepped(c, m);
+            else CrossFeedback.Refused(c, m, CrossFeedback.Card.Magic);
+        }
+        int steps = PadLayout.Take(PadLayout.Press.NextHotkey) - PadLayout.Take(PadLayout.Press.PreviousHotkey)
+                    + (Asked(PadLayout.Press.NextHotkey) ? 1 : 0) - (Asked(PadLayout.Press.PreviousHotkey) ? 1 : 0);
+        if (steps != 0)
+        {
+            if (Cycle(m, steps)) CrossFeedback.Stepped(c, m);
+            else CrossFeedback.Refused(c, m, CrossFeedback.Card.Hotkey);
+        }
         HandsHud.Prepare(c, m, _probe);
 
         int fire = Array.FindIndex(_latch, 0, Count, l => l > 0);
@@ -402,6 +436,9 @@ public static class Shortcuts
 
         // Hotkey 1 is the game's Select as it stands; 2-5 lend it their contents.
         _swapped = false;
+        var (heldSpell, heldItem) = Labels.Held(m, fire);
+        if (heldSpell == None && heldItem == None) CrossFeedback.Refused(c, m, CrossFeedback.Card.Hotkey);
+        else CrossFeedback.Wake();
         if (fire > 0)
         {
             var s = Get(fire);
@@ -424,10 +461,11 @@ public static class Shortcuts
     static bool Fired(int row) => _latch[row] > 0;
 
     /// <summary>Steps the current hotkey <paramref name="steps"/> along the ones that
-    /// hold something (back for a negative count); stays put when none does.</summary>
-    static void Cycle(IMemory m, int steps)
+    /// hold something (back for a negative count); stays put, and is false, when no
+    /// other does.</summary>
+    static bool Cycle(IMemory m, int steps)
     {
-        if (steps == 0) return;
+        if (steps == 0) return false;
         int dir = Math.Sign(steps), at = _hotkey;
         for (int n = Math.Abs(steps); n > 0; n--)
             for (int k = 1; k <= Count; k++)
@@ -438,9 +476,10 @@ public static class Shortcuts
                 at = next;
                 break;
             }
-        if (at == _hotkey) return;
+        if (at == _hotkey) return false;
         _hotkey = at;
         if (_probe) Console.WriteLine($"[KF2] shortcuts: hotkey {at + 1} current");
+        return true;
     }
 
     public static void AfterControl(CpuContext c, IMemory m)
@@ -566,6 +605,7 @@ public static class Shortcuts
         if (StoodDown) return;
         ClearSlots();
         Hands.Reset();
+        CrossFeedback.Forget();
         _hotkey = 0;
         CardFiles.LastFile = "new game";
     }
@@ -575,6 +615,7 @@ public static class Shortcuts
         if (StoodDown || c.RA != DeathReset) return;
         ClearSlots();
         Hands.Reset();
+        CrossFeedback.Forget();
         _hotkey = 0;
         CardFiles.LastFile = "new game (died)";
     }
@@ -589,6 +630,7 @@ public static class Shortcuts
             for (int i = 0; i < Count; i++) _slots[i] = loaded[i];
         var (right, left, hotkey) = CardFiles.ReadHands(_loadSlot);
         Hands.Restore(right, left);
+        CrossFeedback.Forget();
         _hotkey = hotkey;
         if (_probe)
             Console.WriteLine($"[KF2] shortcuts: card slot {_loadSlot} loaded, shortcuts 2-5 " +
@@ -609,7 +651,7 @@ public static class Shortcuts
 
     // ---- the shell's "hands" verb: what the pad would do, without a pad ----
 
-    static int _shellPress = -1;
+    static int _shellPress = -1, _shellSound = -1;
     static volatile int _shellWeaponAway = -1, _shellSpellAway = -1;
 
     /// <summary>Puts a weapon or spell in a hand's other slot for the shell, as the
@@ -623,7 +665,9 @@ public static class Shortcuts
         if (s >= 0) Hands.AssignSpell(m, 1 - left.Out, (byte)s);
     }
 
-    /// <summary><c>hands</c> the state; <c>hands weapon|spell|next|prev|use</c> a press at
+    /// <summary><c>hands sound:12[,30]</c> plays one of the game's sounds (hex id, hex
+    /// volume) at the next control tick, to choose the refusal's;
+    /// <c>hands</c> the state; <c>hands weapon|spell|next|prev|use</c> a press at
     /// the next control tick; <c>hands weapon:ID</c> / <c>spell:ID</c> fill the hand's
     /// other slot (decimal). Fast queue.</summary>
     static string Shell(string arg)
@@ -643,6 +687,12 @@ public static class Shortcuts
             return "{\"ok\":true,\"records\":[" + string.Join(",", rows) + "]}";
         }
         string? error = null;
+        if (arg.StartsWith("sound:"))
+        {
+            if (!CrossFeedback.TryParseSound(arg[6..].Trim(), out var sound)) return "{\"ok\":false,\"error\":\"hands sound:<hex id>[,<hex volume>]\"}";
+            _shellSound = (int)(sound.Se << 8 | sound.Volume);
+            return "{\"ok\":true,\"sound\":" + sound.Se + ",\"volume\":" + sound.Volume + "}";
+        }
         if (arg.StartsWith("weapon:") || arg.StartsWith("spell:"))
         {
             bool weapon = arg[0] == 'w';
@@ -663,7 +713,7 @@ public static class Shortcuts
                 "use" => (int)PadLayout.Press.UseHotkey,
                 _ => -2,
             };
-            if (press == -2) error = "hands [state|weapon|spell|next|prev|use|weapon:ID|spell:ID]";
+            if (press == -2) error = "hands [state|weapon|spell|next|prev|use|weapon:ID|spell:ID|sound:HEX[,VOL]]";
             else if (press >= 0) _shellPress = press;
         }
         if (error != null) return "{\"ok\":false,\"error\":\"" + error + "\"}";

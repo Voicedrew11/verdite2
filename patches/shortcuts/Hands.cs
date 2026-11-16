@@ -94,8 +94,9 @@ static class Hands
     static bool Idle(IMemory m) => (short)m.ReadU16(SwingClock) == -1;
 
     /// <summary>The right hand's other weapon out, through the game's own equip. A swing
-    /// or a drawn bow holds it back until it ends.</summary>
-    internal static void SwapWeapon(CpuContext c, IMemory m, bool probe)
+    /// or a drawn bow holds it back until it ends. False when there is nothing to swap to,
+    /// or the equip did not take.</summary>
+    internal static bool SwapWeapon(CpuContext c, IMemory m, bool probe)
     {
         byte away;
         lock (Shortcuts.Sync) away = _right.Away;
@@ -103,12 +104,12 @@ static class Hands
         if (away == Shortcuts.None)
         {
             if (probe) Console.WriteLine("[KF2] shortcuts: weapon swap, nothing in the other slot");
-            return;
+            return false;
         }
         if (!Idle(m))
         {
             _weaponPending = true;
-            return;
+            return true;
         }
 
         byte was = m.ReadU8(Weapon);
@@ -116,7 +117,7 @@ static class Hands
         if (m.ReadU8(Weapon) != away)
         {
             Console.Error.WriteLine($"[KF2] shortcuts: equipping weapon 0x{away:X2} left 0x{m.ReadU8(Weapon):X2}");
-            return;
+            return false;
         }
         lock (Shortcuts.Sync)
         {
@@ -124,22 +125,24 @@ static class Hands
             _right.Out = 1 - _right.Out;
         }
         if (probe) Console.WriteLine($"[KF2] shortcuts: weapon 0x{was:X2} -> 0x{away:X2}, slot {_right.Out + 1} out");
+        return true;
     }
 
     /// <summary>The left hand's other spell out: the attack spell byte, as the game's
-    /// attack magic page sets it (0x80025F70).</summary>
-    internal static void SwapSpell(IMemory m, bool probe)
+    /// attack magic page sets it (0x80025F70). False when there is nothing to swap to.</summary>
+    internal static bool SwapSpell(IMemory m, bool probe)
     {
         byte away, was = m.ReadU8(AttackSpell);
         lock (Shortcuts.Sync)
         {
             away = _left.Away;
-            if (away == Shortcuts.None) { if (probe) Console.WriteLine("[KF2] shortcuts: spell swap, nothing in the other slot"); return; }
+            if (away == Shortcuts.None) { if (probe) Console.WriteLine("[KF2] shortcuts: spell swap, nothing in the other slot"); return false; }
             _left.Away = was;
             _left.Out = 1 - _left.Out;
         }
         m.WriteU8(AttackSpell, away);
         if (probe) Console.WriteLine($"[KF2] shortcuts: spell 0x{was:X2} -> 0x{away:X2}, slot {_left.Out + 1} out");
+        return true;
     }
 
     /// <summary>func_80026210(id): the weapon byte, its record, its model in the arm and
