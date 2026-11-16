@@ -2338,6 +2338,26 @@ Four files in the directory have no entry below:
   through the turn with the grip on the side facing the eye, and no outline on it.
   Written as `0115` (#93); renumbered on the rebase, and merged with `0116`'s pull:
   `uDepthPull` is added after the caps, then the depth is scaled. **No recompile.**
+- `0115-box-downsample.patch` — the scaled picture averaged back to the game's own
+  pixels. The present texture is the render scale times the display area, and the
+  Output panel drew it to the window bilinearly with no mipmaps: shrunk, that reads
+  four texels in a block of up to sixty-four, and stretched (8x is 1920 lines on a
+  2160-line screen) it smears the raw, unantialiased edges. With
+  `GlVram.Downsample` set, `GlCore.Downsample` runs two passes after the post-fx
+  hook: `DownsampleBoxFs` takes the plain mean of each `scale x scale` block into a
+  texture of the display area at 1x (the widescreen margin included), and
+  `DownsampleUpFs` brings that up to the picture's size with sharp bilinear (flat
+  squares at the largest whole multiple, only the leftover band blended). This is
+  DuckStation's `DownsampleMode=Box`. `PresentDisplay`'s `outW`/`outH`, unused
+  before, is now the Output panel's picture in framebuffer pixels (`OutputView`
+  from the frame before, times `DisplayFramebufferScale`; the window before the
+  first frame), the texture it returns is that size, and `PresentSnap` reads it, so
+  a snap is the picture as drawn. Off by default and at a scale of 1; skipped on
+  the GL 2.1 context and for a 24-bit frame. The key is `Downsample` in the view
+  config, with a checkbox under Display. Measured in KF2 at 8x on a 3840x2160
+  fullscreen: a snap of 3840x2160 that is 9x9 squares of a 428x240 picture, against
+  the 3424x1920 target without it. **How it looks in motion is not judged here.**
+  **No recompile.**
 
 ## Package bumps
 

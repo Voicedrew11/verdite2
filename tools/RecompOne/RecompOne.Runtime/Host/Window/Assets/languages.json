@@ -686,6 +686,22 @@
       "zh-CN": "当前状态下为 {1} 行数, 缩放后为 {3} 行数 ({4}x)",
       "fr-FR": "{1} lignes à l'origine, {3} après mise à l'échelle ({4}x)"
     },
+    "settings.display.downsample": {
+      "en": "Downsample to original resolution",
+      "pt-BR": "Reduzir para a resolução original",
+      "es-419": "Reducir a la resolución original",
+      "ja-JP": "元の解像度にダウンサンプル",
+      "zh-CN": "降采样至原始分辨率",
+      "fr-FR": "Réduire à la résolution d'origine"
+    },
+    "settings.display.downsample_hint": {
+      "en": "Averages the scaled picture back to the original pixels, then scales them up evenly. Smooth edges with the PSX's pixel grid.",
+      "pt-BR": "Calcula a média da imagem escalada de volta aos pixels originais e depois os amplia de forma uniforme. Bordas suaves com a grade de pixels do PSX.",
+      "es-419": "Promedia la imagen escalada de vuelta a los píxeles originales y luego los amplía de forma uniforme. Bordes suaves con la cuadrícula de píxeles de PSX.",
+      "ja-JP": "スケールした画像を元のピクセルに平均化し、均等に拡大します。PSXのピクセルグリッドのまま輪郭が滑らかになります。",
+      "zh-CN": "将缩放后的画面平均回原始像素，再均匀放大。保留PSX像素网格的同时使边缘平滑。",
+      "fr-FR": "Ramène l'image mise à l'échelle aux pixels d'origine par moyenne, puis les agrandit uniformément. Des bords lisses sur la grille de pixels de la PSX."
+    },
     "settings.display.backend": {
       "en": "Graphics backend",
       "pt-BR": "Backend gráfico",

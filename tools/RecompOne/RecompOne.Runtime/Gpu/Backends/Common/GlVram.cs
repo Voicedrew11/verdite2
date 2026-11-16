@@ -15,6 +15,11 @@ public static class GlVram
     /// texture size limit; a request above it is taken at this.</summary>
     public static int MaxScale { get; set; } = 8;
 
+    /// <summary>0115. Average the scaled picture back down to the game's own pixels
+    /// before it is drawn, and bring it up to the window with sharp bilinear. Has no
+    /// effect at a scale of 1, where there is nothing to average.</summary>
+    public static bool Downsample { get; set; }
+
     /// <summary>Keep a scaled copy of every framebuffer readback, so an upload of
     /// the same pixels back into VRAM is served by that copy instead of by the 1x
     /// data the game read. See GlCore's snapshot block. On by default;

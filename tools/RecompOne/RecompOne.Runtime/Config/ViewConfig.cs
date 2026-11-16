@@ -127,6 +127,13 @@ public class ViewConfig
         set => SetFloat("RenderScale", value < 1 ? 1 : value > 8 ? 8 : value);
     }
 
+    /// <summary>0115. <see cref="Hle.GlVram.Downsample"/>.</summary>
+    public bool Downsample
+    {
+        get => GetBool("Downsample");
+        set => SetBool("Downsample", value);
+    }
+
     public bool VSync
     {
         get => GetBool("VSync");

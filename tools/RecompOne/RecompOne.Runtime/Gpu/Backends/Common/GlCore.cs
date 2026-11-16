@@ -110,6 +110,12 @@ public sealed partial class GlCore : IGpuBackend
     int _lightNSent = -1, _lightsSentGen = -1, _kRemasterGen;
 
     uint _postProg, _postFbo, _postTex;
+    // 0115. The downsample's two programs and its two targets: the game's own
+    // pixels, and the size the Output panel draws the picture at.
+    uint _dsBoxProg, _dsUpProg, _dsBoxTex, _dsBoxFbo, _dsUpTex, _dsUpFbo;
+    int _uDsFactor = -1, _uDsSrcSize = -1, _uDsOutSize = -1;
+    int _dsBoxW, _dsBoxH, _dsUpW, _dsUpH;
+    bool _dsFailed;
     int _postW, _postH, _postVersion = -1;
     int _uPostTexSize, _uPostOutputSize, _uPostTime, _uPostFrame;
     int _postFrame, _postParamVersion = -1;
@@ -2823,15 +2829,104 @@ public sealed partial class GlCore : IGpuBackend
         }
 
         uint outTex = ApplyPostFx(_presentTex, fbW, fbH);
+        uint outFbo = outTex == _postTex ? _postFbo : _presentFbo;
+        int outTexW = fbW, outTexH = fbH;
+        if (GlVram.Downsample && presentScale > 1 && !rgb24 && outW > 0 && outH > 0
+            && Downsample(outTex, presentScale, w1x, h1x, outW, outH))
+            (outTex, outFbo, outTexW, outTexH) = (_dsUpTex, _dsUpFbo, outW, outH);
         EndGpuTimer(compQuery, GpuWork.Composite, compStart, Diagnostics.GpuTimes.Pass.Composite);
         ResolveGpuTimes();
         Diagnostics.GpuTimes.Issued = ++_gpuPresent;
         Diagnostics.Profiler.End(compProfile);
-        if (PresentSnap.Due(dispY)) SnapPresent(outTex == _postTex ? _postFbo : _presentFbo, fbW, fbH, dispX, dispY);
+        if (PresentSnap.Due(dispY)) SnapPresent(outFbo, outTexW, outTexH, dispX, dispY);
 
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         GpuTrace.Sink?.Work(GpuWork.Present, presentStart, System.Diagnostics.Stopwatch.GetTimestamp(), 0);
-        return (outTex, fbW, fbH, aspect);
+        return (outTex, outTexW, outTexH, aspect);
+    }
+
+    /// <summary>0115. The scaled picture boxed down to the game's own pixels and
+    /// brought back up to the size it is drawn at. Without it the Output panel
+    /// shrinks a 1920-line target to the window bilinearly with no mipmaps, which
+    /// reads four texels out of every sixty-four and shimmers on every edge as the
+    /// camera moves. False leaves the picture as it was: the GL 2.1 context has
+    /// no texelFetch, and a program that fails to build is not retried.</summary>
+    unsafe bool Downsample(uint srcTex, int factor, int w1x, int h1x, int outW, int outH)
+    {
+        if (_legacy || _dsFailed) return false;
+        if (_dsBoxProg == 0)
+        {
+            _dsBoxProg = GlShaders.Build(_gl, GlShaders.FullscreenVs, GlShaders.DownsampleBoxFs, "downsample-box", out string? boxError);
+            _dsUpProg = GlShaders.Build(_gl, GlShaders.FullscreenVs, GlShaders.DownsampleUpFs, "downsample-up", out string? upError);
+            if (_dsBoxProg == 0 || _dsUpProg == 0)
+            {
+                Console.WriteLine($"[gpu-ds] {boxError ?? upError}");
+                _dsFailed = true;
+                return false;
+            }
+            _gl.UseProgram(_dsBoxProg);
+            _gl.Uniform1(_gl.GetUniformLocation(_dsBoxProg, "uSrc"), 0);
+            _uDsFactor = _gl.GetUniformLocation(_dsBoxProg, "uFactor");
+            _gl.UseProgram(_dsUpProg);
+            _gl.Uniform1(_gl.GetUniformLocation(_dsUpProg, "uSrc"), 0);
+            _uDsSrcSize = _gl.GetUniformLocation(_dsUpProg, "uSrcSize");
+            _uDsOutSize = _gl.GetUniformLocation(_dsUpProg, "uOutSize");
+            (_dsBoxTex, _dsBoxFbo) = DownsampleTarget();
+            (_dsUpTex, _dsUpFbo) = DownsampleTarget();
+        }
+        if (w1x != _dsBoxW || h1x != _dsBoxH)
+        {
+            DownsampleResize(_dsBoxTex, _dsBoxFbo, w1x, h1x);
+            (_dsBoxW, _dsBoxH) = (w1x, h1x);
+        }
+        if (outW != _dsUpW || outH != _dsUpH)
+        {
+            DownsampleResize(_dsUpTex, _dsUpFbo, outW, outH);
+            (_dsUpW, _dsUpH) = (outW, outH);
+        }
+
+        _gl.Disable(EnableCap.DepthTest);
+        _gl.Disable(EnableCap.Blend);
+        _gl.Disable(EnableCap.ScissorTest);
+        _gl.BindVertexArray(_presentVao);
+        _gl.ActiveTexture(TextureUnit.Texture0);
+
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _dsBoxFbo);
+        _gl.Viewport(0, 0, (uint)w1x, (uint)h1x);
+        _gl.UseProgram(_dsBoxProg);
+        _gl.BindTexture(TextureTarget.Texture2D, srcTex);
+        _gl.Uniform1(_uDsFactor, factor);
+        _gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
+
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _dsUpFbo);
+        _gl.Viewport(0, 0, (uint)outW, (uint)outH);
+        _gl.UseProgram(_dsUpProg);
+        _gl.BindTexture(TextureTarget.Texture2D, _dsBoxTex);
+        _gl.Uniform2(_uDsSrcSize, (float)w1x, h1x);
+        _gl.Uniform2(_uDsOutSize, (float)outW, outH);
+        _gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
+        return true;
+    }
+
+    (uint tex, uint fbo) DownsampleTarget()
+    {
+        uint tex = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, tex);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
+        return (tex, _gl.GenFramebuffer());
+    }
+
+    unsafe void DownsampleResize(uint tex, uint fbo, int w, int h)
+    {
+        _gl.BindTexture(TextureTarget.Texture2D, tex);
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)w, (uint)h, 0,
+            PixelFormat.Rgba, PixelType.UnsignedByte, null);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, fbo);
+        _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
+            TextureTarget.Texture2D, tex, 0);
     }
     
     /// <summary>0069. The composited picture, read back for <see cref="PresentSnap"/>.
