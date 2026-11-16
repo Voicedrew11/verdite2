@@ -6,7 +6,7 @@ index 12bd752..50ae4c9 100644
          set => SetFloat("RenderScale", value < 1 ? 1 : value > 8 ? 8 : value);
      }
  
-+    /// <summary>0115. <see cref="Hle.GlVram.Downsample"/>.</summary>
++    /// <summary>0116. <see cref="Hle.GlVram.Downsample"/>.</summary>
 +    public bool Downsample
 +    {
 +        get => GetBool("Downsample");
@@ -24,7 +24,7 @@ index d995985..c1c0209 100644
      int _lightNSent = -1, _lightsSentGen = -1, _kRemasterGen;
  
      uint _postProg, _postFbo, _postTex;
-+    // 0115. The downsample's two programs and its two targets: the game's own
++    // 0116. The downsample's two programs and its two targets: the game's own
 +    // pixels, and the size the Output panel draws the picture at.
 +    uint _dsBoxProg, _dsUpProg, _dsBoxTex, _dsBoxFbo, _dsUpTex, _dsUpFbo;
 +    int _uDsFactor = -1, _uDsSrcSize = -1, _uDsOutSize = -1;
@@ -55,7 +55,7 @@ index d995985..c1c0209 100644
 +        return (outTex, outTexW, outTexH, aspect);
 +    }
 +
-+    /// <summary>0115. The scaled picture boxed down to the game's own pixels and
++    /// <summary>0116. The scaled picture boxed down to the game's own pixels and
 +    /// brought back up to the size it is drawn at. Without it the Output panel
 +    /// shrinks a 1920-line target to the window bilinearly with no mipmaps, which
 +    /// reads four texels out of every sixty-four and shimmers on every edge as the
@@ -148,7 +148,7 @@ index 2b1233e..220d718 100644
          }
          """;
  
-+    // 0115. The scaled picture averaged back to the game's own pixels: one
++    // 0116. The scaled picture averaged back to the game's own pixels: one
 +    // output texel is the plain mean of the uFactor x uFactor block under it.
 +    // The loop bounds are constants because GLSL 3.30 drivers unroll on them;
 +    // the render scale is at most 8.
@@ -171,7 +171,7 @@ index 2b1233e..220d718 100644
 +        }
 +        """;
 +
-+    // 0115. The averaged picture brought up to the window with sharp bilinear:
++    // 0116. The averaged picture brought up to the window with sharp bilinear:
 +    // each game pixel is a flat square at the largest whole multiple that fits,
 +    // and only the band left over between two of them is blended, so the rows
 +    // come out even at a scale like 4.5 without smearing the whole picture.
@@ -203,7 +203,7 @@ index b3834a8..b920e8c 100644
      /// texture size limit; a request above it is taken at this.</summary>
      public static int MaxScale { get; set; } = 8;
  
-+    /// <summary>0115. Average the scaled picture back down to the game's own pixels
++    /// <summary>0116. Average the scaled picture back down to the game's own pixels
 +    /// before it is drawn, and bring it up to the window with sharp bilinear. Has no
 +    /// effect at a scale of 1, where there is nothing to average.</summary>
 +    public static bool Downsample { get; set; }
@@ -254,7 +254,7 @@ index a49372d..e7072b4 100644
              if (Hle.GpuHle.Active && _glBackend is { Ready: true } && gpu.DisplayEnabled)
              {
                  var wf = _window!.FramebufferSize;
-+                // 0115. The size the Output panel drew the picture at last frame, in
++                // 0116. The size the Output panel drew the picture at last frame, in
 +                // framebuffer pixels, so the downsample brings it up to exactly that
 +                // and ImGui then draws it one to one. The window before the first frame.
 +                var (outW, outH) = (wf.X, wf.Y);

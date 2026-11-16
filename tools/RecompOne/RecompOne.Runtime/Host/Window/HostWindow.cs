@@ -1173,7 +1173,7 @@ public static class HostWindow
             if (Hle.GpuHle.Active && _glBackend is { Ready: true } && gpu.DisplayEnabled)
             {
                 var wf = _window!.FramebufferSize;
-                // 0115. The size the Output panel drew the picture at last frame, in
+                // 0129. The size the Output panel drew the picture at last frame, in
                 // framebuffer pixels, so the downsample brings it up to exactly that
                 // and ImGui then draws it one to one. The window before the first frame.
                 var (outW, outH) = (wf.X, wf.Y);

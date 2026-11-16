@@ -14,7 +14,7 @@ internal static class GlShaders
         }
         """;
 
-    // 0115. The scaled picture averaged back to the game's own pixels: one
+    // 0129. The scaled picture averaged back to the game's own pixels: one
     // output texel is the plain mean of the uFactor x uFactor block under it.
     // The loop bounds are constants because GLSL 3.30 drivers unroll on them;
     // the render scale is at most 8.
@@ -37,7 +37,7 @@ internal static class GlShaders
         }
         """;
 
-    // 0115. The averaged picture brought up to the window with sharp bilinear:
+    // 0129. The averaged picture brought up to the window with sharp bilinear:
     // each game pixel is a flat square at the largest whole multiple that fits,
     // and only the band left over between two of them is blended, so the rows
     // come out even at a scale like 4.5 without smearing the whole picture.

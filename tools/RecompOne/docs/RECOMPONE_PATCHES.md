@@ -2338,7 +2338,7 @@ Four files in the directory have no entry below:
   through the turn with the grip on the side facing the eye, and no outline on it.
   Written as `0115` (#93); renumbered on the rebase, and merged with `0116`'s pull:
   `uDepthPull` is added after the caps, then the depth is scaled. **No recompile.**
-- `0115-box-downsample.patch` — the scaled picture averaged back to the game's own
+- `0129-box-downsample.patch` — the scaled picture averaged back to the game's own
   pixels. The present texture is the render scale times the display area, and the
   Output panel drew it to the window bilinearly with no mipmaps: shrunk, that reads
   four texels in a block of up to sixty-four, and stretched (8x is 1920 lines on a

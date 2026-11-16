@@ -110,7 +110,7 @@ public sealed partial class GlCore : IGpuBackend
     int _lightNSent = -1, _lightsSentGen = -1, _kRemasterGen;
 
     uint _postProg, _postFbo, _postTex;
-    // 0115. The downsample's two programs and its two targets: the game's own
+    // 0129. The downsample's two programs and its two targets: the game's own
     // pixels, and the size the Output panel draws the picture at.
     uint _dsBoxProg, _dsUpProg, _dsBoxTex, _dsBoxFbo, _dsUpTex, _dsUpFbo;
     int _uDsFactor = -1, _uDsSrcSize = -1, _uDsOutSize = -1;
@@ -2845,7 +2845,7 @@ public sealed partial class GlCore : IGpuBackend
         return (outTex, outTexW, outTexH, aspect);
     }
 
-    /// <summary>0115. The scaled picture boxed down to the game's own pixels and
+    /// <summary>0129. The scaled picture boxed down to the game's own pixels and
     /// brought back up to the size it is drawn at. Without it the Output panel
     /// shrinks a 1920-line target to the window bilinearly with no mipmaps, which
     /// reads four texels out of every sixty-four and shimmers on every edge as the
