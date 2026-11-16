@@ -2297,6 +2297,24 @@ Four files in the directory have no entry below:
   `0.5a` and `1 - 0.5a`, so `a = 1` is the game's). Subtractive packets and the
   legacy blend path keep the game's blend; the software rasterizer ignores it.
   `PacketOpacity.Drawn` counts the packets drawn faded. **No recompile.**
+- `0127-model-bury.patch` — a model behind a wall, drawn on it. An open chest lid
+  hangs inside the tile of the wall it swings into, and the per-pixel depth test cut
+  it into a sawtooth where the console, ordering whole polygons by one depth, drew it
+  solid. `GlMainView` copies the map's depth after `DrawMapOpaque` (`uWorldDepth`),
+  `WorldVs` passes a world model's origin in view space (`vModelEye`; not the arm,
+  the sky or a packet), and `PrimFs` writes the wall's depth over a model fragment
+  behind it when three things hold. The ray through the origin meets map behind the
+  origin, read at the screen's edge when the origin is past it (a fetch outside the
+  copy is 0, and a lid at the edge of view lost its wall). The origin is within one
+  tile (2048) of this wall pixel: a barrel seen through a doorway is about 3800 off.
+  And the origin stands more than 256 in front of the wall's plane, rebuilt from the
+  copy two game pixels out: a lid's hinge is 384-512 in front, a corner plant 0-64, a
+  secret door 257 behind. `ModelInstance.Door` is never pulled (KF2 sets it for its
+  doors and secret walls, which slide inside the wall they sit in); `RetainedScene.Bury`
+  is the switch. Measured in KF2, by eye: the lid solid at rest from four angles and
+  at the edge of view, the barrel in the next room hidden, the plant's leaf behind
+  its wall, the floor behind a secret wall no longer drawn on it. **Not looked at:**
+  the lid mid-swing, a monster pressed against a wall. **No recompile.**
 
 ## Package bumps
 
