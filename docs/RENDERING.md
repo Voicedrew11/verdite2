@@ -1106,6 +1106,14 @@ and 71.6-71.8 after (GPU-bound), 19.9 ticks/s both. GL 4.5 and 2.1 both compile,
 link and reach an area with `KF2_GLDEBUG=1` reporting no errors, and the picture
 was checked by eye on it after both.
 
+## A model behind a wall
+
+The bury test (`uOtzBury` in PrimFs) writes a wall's depth over a model fragment that sits behind the map, when the ray from the eye through the model's origin hits the map behind that origin. That keeps an open chest lid, which hangs inside its own wall's tile, from vanishing into the wall. It also pulled a corner plant's leaf, whose tip sticks round the corner, onto the wall in front of it.
+
+The origin's distance in front of the wall's plane tells the two apart. An open lid's hinge sits 384 to 512 units in front of the wall it swings into. The plant sits 0 to 64 from its face. A secret door sits 257 behind its wall. The pull now needs the origin more than 256 units in front of the plane. The plane is rebuilt from the map's own depth around the pixel, two game pixels out, and each axis takes the side that stays on that face.
+
+Doors and secret walls are flagged (`ModelInstance.Door`) and never pulled, since they slide inside the wall they sit in. `gpuworld bury off` puts the test back to the old behaviour. The plant, the lid, the barrel and the secret wall were checked by eye.
+
 ## PGXP: upstream's own recovery, and what taking it actually bought
 
 **Mechanism confirmed and measured; the picture has not been looked at.**
