@@ -3945,6 +3945,36 @@ the world behind it.
 The mechanism is `tools/RecompOne/patches/0039`. GL backend only: the software
 rasterizer has a 1x VRAM and nothing to preserve.
 
+## Downsampling: the render scale as antialiasing, not as resolution
+
+**Measured mechanism; how it looks in motion is the player's to judge.**
+
+Reported from play: *the picture does not look as good as RetroArch's.* The
+RetroArch setup it was compared with runs DuckStation at 8x with
+`GPU.DownsampleMode=Box`: the core renders at 1920 lines and averages each 8x8
+block back to one of the console's 240 before anything is drawn to the screen.
+Here the 8x target went to the window as it was, through the Output panel's
+bilinear sampler with no mipmaps. On a 2160-line screen that stretches 1920 lines
+to 2160, and every polygon edge, drawn with one sample per pixel, comes out a
+hard step smeared by the stretch; on a smaller window it shrinks instead, reading
+four texels of each 8x8 block, and the edges shimmer as the camera turns.
+
+**DOWNSAMPLE** under DISPLAY (`KF2_DOWNSAMPLE=1`; the runtime's `Downsample`
+key, so Settings ▸ Display has it too) does what DuckStation does: the present
+averages each block into a picture of the game's own size (428x240 at 16:9, the
+margin included), then scales that to the window with sharp bilinear, so the
+pixels are even squares at whatever size the window is and only the band between
+two of them is blended. The render scale stops being sharpness and becomes the
+number of samples per game pixel: at 8x, 64 of them, so an edge is a true
+coverage blend and a texture's distant texels are averaged rather than picked.
+The HUD and the text go through the same average, so they come back on the
+console's own pixel grid too. Dimmed at 240P, where a block is one sample.
+
+Measured at 8x on a 3840x2160 fullscreen: the snap is 3840x2160, 9x9 squares of a
+428x240 picture, against the 3424x1920 target with the setting off. The
+mechanism is `tools/RecompOne/patches/0115`. GL 3.3 and up; the 2.1 context
+keeps the plain present.
+
 ## A shop overwrote the textures with the atlas's old texels
 
 **Fixed; confirmed by eye in the shop.** Reported from play: after opening and
