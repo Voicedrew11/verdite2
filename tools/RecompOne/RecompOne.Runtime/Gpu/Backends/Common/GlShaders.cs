@@ -2669,7 +2669,10 @@ internal static class GlShaders
             if (vModelEye.z > 0.0 && uOtzBury > 0.0) {
                 float wall = texelFetch(uWorldDepth, ivec2(gl_FragCoord.xy), 0).r;
                 vec2 game = uClipCentre + vec2(uClipH) * vModelEye.xy / vModelEye.z;
-                float behind = texelFetch(uWorldDepth, ivec2(game * float(uScale)), 0).r;
+                // An origin past the screen's edge reads the map at the edge: a fetch
+                // outside the texture is 0, and a lid at the edge of view lost its wall.
+                ivec2 gp = clamp(ivec2(game * float(uScale)), ivec2(0), textureSize(uWorldDepth, 0) - 1);
+                float behind = texelFetch(uWorldDepth, gp, 0).r;
                 // LEQUAL then prefers this fragment over the wall it ties with, and
                 // anything genuinely nearer than the wall still wins on its own depth.
                 bool inRoom = behind > 0.9999 || behind * 65536.0 > vModelEye.z;
