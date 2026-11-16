@@ -1118,7 +1118,7 @@ The map behind the origin is read where the origin lands on screen. A lid at the
 
 Tried and removed on the way:
 - Scaling a whole model's depth towards the eye clipped the lid mid-swing and showed the barrel in the next room through its wall.
-- Capping how far a fragment may be pulled did not separate the lid from the plant, since both are within a tile of their wall.
+- A cap on how far a fragment may be pulled, replaced by the distance and plane rules above.
 - Averaging each face's depth (a face-order pass, the console's ordering by polygon) drew the chest's bottom with the floor showing through it in thin lines, and then cut wedges into the stairs: a hidden riser's corners averaged nearer than the tread in front of it. A tie-break fixed one view and not the next, so the pass was taken out.
 
 ## A picked-up item inside its barrel
