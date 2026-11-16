@@ -1116,6 +1116,17 @@ Doors and secret walls are flagged (`ModelInstance.Door`) and never pulled, sinc
 
 The map behind the origin is read where the origin lands on screen. A lid at the edge of view has its hinge past the edge, where a fetch from the depth copy is 0, and the lid lost its wall again until the hinge came back into view. The read is clamped to the screen's edge (`0113`).
 
+Tried and removed on the way:
+- Scaling a whole model's depth towards the eye clipped the lid mid-swing and showed the barrel in the next room through its wall.
+- Capping how far a fragment may be pulled did not separate the lid from the plant, since both are within a tile of their wall.
+- Averaging each face's depth (a face-order pass, the console's ordering by polygon) drew the chest's bottom with the floor showing through it in thin lines, and then cut wedges into the stairs: a hidden riser's corners averaged nearer than the tread in front of it. A tie-break fixed one view and not the next, so the pass was taken out.
+
+## A picked-up item inside its barrel
+
+A picked-up item flies up from where it lay, at the barrel's or the chest's depth. The console's table slot puts it in front; the depth test left the mask half inside its barrel and the shield inside its chest. `ModelInstance.Front` (`0115`), set by KF2 for a pickup and the menu preview, draws the item after the others with its depth at half its view depth.
+
+The first version forced the depth test to pass. The item came out, but its faces no longer hid one another and drew in the order they were sent: from behind, the board covered the shield's grip except its two mounts, and from the front the grip showed through the board, so the grip looked as if it did not turn with the shield. The normal pass still saw the chest behind the shield, so the occlusion drew the chest's edge on it and darkened its top. A scale keeps the faces testing each other, and the normal pass now draws a front item last, over the world. Checked by eye: the mask looking down at its barrel, the shield through its turn.
+
 ## A face's texels truncate down
 
 The centre tap used to round towards the texel the gradient enters from, the sign of dU/dx for U and of dV/dy for V. A console polygon's mapping is affine, so that sign is one per polygon. A perspective-correct one is not: on the first stairs seen from the side, the sign changed inside the step, and the texture slipped a texel along a line that moved with the camera. Taking the sign from the affine gradient moved the flip, it did not remove it. A face whose V runs across the screen had dV/dy of 0.0003, so its sign was noise. A long riser's two halves disagreed along the diagonal.
