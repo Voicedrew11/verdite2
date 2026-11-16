@@ -1114,6 +1114,14 @@ The origin's distance in front of the wall's plane tells the two apart. An open 
 
 Doors and secret walls are flagged (`ModelInstance.Door`) and never pulled, since they slide inside the wall they sit in. `gpuworld bury off` puts the test back to the old behaviour. The plant, the lid, the barrel and the secret wall were checked by eye.
 
+The map behind the origin is read where the origin lands on screen. A lid at the edge of view has its hinge past the edge, where a fetch from the depth copy is 0, and the lid lost its wall again until the hinge came back into view. The read is clamped to the screen's edge (`0113`).
+
+## A face's texels truncate down
+
+The centre tap used to round towards the texel the gradient enters from, the sign of dU/dx for U and of dV/dy for V. A console polygon's mapping is affine, so that sign is one per polygon. A perspective-correct one is not: on the first stairs seen from the side, the sign changed inside the step, and the texture slipped a texel along a line that moved with the camera. Taking the sign from the affine gradient moved the flip, it did not remove it. A face whose V runs across the screen had dV/dy of 0.0003, so its sign was noise. A long riser's two halves disagreed along the diagonal.
+
+Any direction read off the gradient flips at some camera angle, so a face with a depth always takes `floor` (`0114`). A face without one is drawn affine, as the console drew it, and keeps the console's rule, from both axes since the console steps from the pixel's corner. Measured by strafing on the stairs: 0 texel jumps, 42 changed blocks before. A face with a mirrored texture now shows its other edge texel, which was not visible by eye.
+
 ## PGXP: upstream's own recovery, and what taking it actually bought
 
 **Mechanism confirmed and measured; the picture has not been looked at.**
