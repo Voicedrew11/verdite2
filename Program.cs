@@ -1067,6 +1067,9 @@ if (!RecompOne.Runtime.Hle.GlVram.Snapshots)
 if (Environment.GetEnvironmentVariable("KF2_DOWNSAMPLE") is { Length: > 0 } downsample)
     RecompOne.Runtime.Events.Event.AddListener<RecompOne.Runtime.Events.RuntimeReadyEvent>(_ =>
         RecompOne.Runtime.Hle.GlVram.Downsample = downsample.Trim() != "0");
+if (Environment.GetEnvironmentVariable("KF2_CRT") is { Length: > 0 } crt)
+    RecompOne.Runtime.Events.Event.AddListener<RecompOne.Runtime.Events.RuntimeReadyEvent>(_ =>
+        RecompOne.Runtime.Hle.GlVram.Crt = crt.Trim() != "0");
 
 // Which vblank timeline VSync runs on. Upstream grew its own after the pin this
 // port was vendored from: Interrupts owns a wall-clock grid and VSync *blocks*

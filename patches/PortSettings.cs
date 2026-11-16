@@ -105,6 +105,11 @@ public static class PortSettings
         tip: "Renders at the chosen resolution, then averages it back to the original 240 lines: smooth edges that keep the PSX's pixels.",
         usable: () => Resolution.Live() > 1);
 
+    /// <summary>Personal build: the fakelottes-kris CRT pass over the downsampled picture.</summary>
+    public static readonly PortSetting Crt = Switch("Crt", "KF2_CRT", "CRT shader",
+        DisplayPage, "CRT", () => RecompOne.Runtime.Hle.GlVram.Crt, v => RecompOne.Runtime.Hle.GlVram.Crt = v, false,
+        usable: () => Resolution.Live() > 1 && RecompOne.Runtime.Hle.GlVram.Downsample);
+
     static readonly double[] Aspects = [.. Widescreen.Presets.Select(p => (double)p.Ratio)];
 
     /// <summary>The four presets <see cref="Widescreen.Presets"/> offers, in its order.</summary>
@@ -532,7 +537,7 @@ public static class PortSettings
     /// <summary>The game's page, in order. Each row is one setting or a combined row.</summary>
     public static readonly PortSetting[] Menu =
     [
-        Display, Resolution, Downsample, Aspect, HudAnchor, FrameRateRow,
+        Display, Resolution, Downsample, Crt, Aspect, HudAnchor, FrameRateRow,
         TextureFilter, PerPixel, AmbientOcclusionRow, ShadingRow,
         RenderDist, FogMode, Water,
         Language, Font, AutoReloadOn, GearCompareOn, CursorMemoryOn, NpcDialogueOn, EnemyTurnSpeed,
@@ -544,7 +549,7 @@ public static class PortSettings
     /// <c>settings</c> verb and the start-up check read.</summary>
     public static readonly PortSetting[] All =
     [
-        Display, Resolution, Downsample, Aspect, HudAnchor, FrameRate, Smoothing,
+        Display, Resolution, Downsample, Crt, Aspect, HudAnchor, FrameRate, Smoothing,
         Mipmaps, Anisotropy, PerPixel, Ao, AoQuality, NoDitherOn, TrueColorOn,
         RenderDist, FogMode, MurkyWater, WaterWaves, Planar,
         Language, Font, AutoReloadOn, GearCompareOn, CursorMemoryOn, ShortcutsOn, NpcDialogueOn, EnemyTurnSpeed, FocusPauseOn,
