@@ -1037,6 +1037,15 @@ RecompOne.Runtime.Hle.GlVram.SnapshotProbe =
 if (!RecompOne.Runtime.Hle.GlVram.Snapshots)
     Console.WriteLine("[KF2] vram snapshots: off (a menu restores the frame at 1x)");
 
+// The runtime's box downsample (0115). Its saved key is read when the window comes
+// up, which is before the runtime is ready, so the run's override goes on after:
+//
+//     KF2_DOWNSAMPLE=1      the scaled picture averaged back to 240 lines
+//     KF2_DOWNSAMPLE=0      the scaled picture as it is
+if (Environment.GetEnvironmentVariable("KF2_DOWNSAMPLE") is { Length: > 0 } downsample)
+    RecompOne.Runtime.Events.Event.AddListener<RecompOne.Runtime.Events.RuntimeReadyEvent>(_ =>
+        RecompOne.Runtime.Hle.GlVram.Downsample = downsample.Trim() != "0");
+
 // Which vblank timeline VSync runs on. Upstream grew its own after the pin this
 // port was vendored from: Interrupts owns a wall-clock grid and VSync *blocks*
 // in WaitVBlanks until the count reaches its target, which is what the hardware
