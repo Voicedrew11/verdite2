@@ -318,6 +318,8 @@ public static class GpuWorld
         var word = arg.Trim().ToLowerInvariant();
         if (word.StartsWith("blend only ") && int.TryParse(word.AsSpan(11), out int only)) { RetainedScene.BlendOnly = only; word = ""; }
         if (word.StartsWith("at ")) return At(word[3..]);
+        if (word == "bury on") { RetainedScene.Bury = true; word = ""; }
+        if (word == "bury off") { RetainedScene.Bury = false; word = ""; }
         if (word.StartsWith("depthcap ") && float.TryParse(word.AsSpan(9), System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture, out float depthCap) && depthCap >= 0f)
         { RetainedScene.DepthCapPixels = depthCap; word = ""; }
@@ -418,6 +420,7 @@ public static class GpuWorld
                $"\"depthCap\":{RetainedScene.DepthCapPixels.ToString(System.Globalization.CultureInfo.InvariantCulture)}," +
                $"\"modelClip\":{(RetainedScene.ModelNearClip ? "true" : "false")},\"clipFaces\":{RetainedModels.ClipFaces},\"clipped\":{RetainedModels.Clipped}," +
                $"\"clipTwinFaces\":{RetainedModels.ClipTwinFaces},\"clipTwinClipped\":{RetainedModels.ClipTwinClipped}," +
+               $"\"bury\":{(RetainedScene.Bury ? "true" : "false")}," +
                $"\"draws\":{RetainedScene.MainDraws},\"missed\":{RetainedScene.MainMissed}}}";
     }
 

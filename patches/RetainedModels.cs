@@ -1066,6 +1066,8 @@ static class RetainedModels
             Mirrored = !mirror && mirrorWhole && !arm,
             Solid = gpuBlend && ModelWalk.SubmitKind == ModelKind.Object
                     && ModelWalk.SolidKind(ModelWalk.ObjectKind(mem, ModelWalk.SubmitRecord)),
+            Door = ModelWalk.SubmitKind == ModelKind.Object
+                   && ModelWalk.SolidKind(ModelWalk.ObjectKind(mem, ModelWalk.SubmitRecord)),
             TwinMode = twinRoute ? twin + 1 : 0,
         };
         m.BlendSurfaces = gpuBlend && !mirror && BlendSurfacesOn
