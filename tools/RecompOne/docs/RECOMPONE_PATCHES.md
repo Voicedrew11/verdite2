@@ -2316,6 +2316,23 @@ Four files in the directory have no entry below:
   leaf behind its wall, the floor behind a secret wall no longer drawn on it, monsters
   pressed against walls whole, and #53's pedestal item and merchant whole.
   **No recompile.**
+- `0128-front-models.patch` — a model the game shows over the world, drawn over it.
+  A picked-up item flies from where it lay, and its depth is the barrel's or the
+  chest's: depth-tested there, the mask stayed inside its barrel and the shield inside
+  its chest, where the console's table slot put both in front. `ModelInstance.Front`
+  (the game sets it; KF2 for a pickup and the menu preview) sends an instance through
+  `DrawInFront` after the others, with its depth written at `FrontScale` (0.5) of its
+  view depth through `PrimFs`'s `uDepthScale`, and its blended faces take the same.
+  Forcing the depth test to pass was tried first: it put the item in front and
+  painted the shield's grip over the board from every side, since the faces no longer
+  hid one another. A scale keeps the faces testing each other; an offset does not, as
+  at that range any useful one clamps every face to 0 and the last drawn wins. The
+  normal pass draws a front instance last, as `SurfaceMaterial.Overlay` with the depth
+  cull off, so occlusion and reflections read the item and not the chest behind it,
+  which had drawn the chest's outline on the shield and darkened its top. Measured in
+  KF2, by eye: the mask over its barrel looking down, the shield over its chest
+  through the turn with the grip on the side facing the eye, and no outline on it.
+  **No recompile.**
 
 ## Package bumps
 

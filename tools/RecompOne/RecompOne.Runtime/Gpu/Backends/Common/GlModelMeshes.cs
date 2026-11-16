@@ -295,6 +295,7 @@ public sealed partial class GlCore
             if (_uwModelSky >= 0) _gl.Uniform1(_uwModelSky, 0);
             if (_uwModelTile >= 0) _gl.Uniform1(_uwModelTile, 0);
             if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
+            if (_uwDepthScale >= 0) _gl.Uniform1(_uwDepthScale, 1f);
             _gl.Uniform1(_uwModel, 0);
         }
         else
@@ -362,6 +363,7 @@ public sealed partial class GlCore
         if (_uwModelRgbc >= 0) _gl.Uniform1(_uwModelRgbc, m.Rgbc);
         if (_uwModelMat >= 0) _gl.Uniform1(_uwModelMat, m.Material);
         if (_uwModelKeep >= 0) _gl.Uniform1(_uwModelKeep, 1f - Math.Clamp(m.FadeOut, 0f, 1f));
+        if (_uwDepthScale >= 0) _gl.Uniform1(_uwDepthScale, m.Front ? FrontScale : 1f);
         if (_uwOtzBury >= 0) _gl.Uniform1(_uwOtzBury, RetainedScene.Bury && !m.Door ? OtzBury : 0f);
         if (_uwBk >= 0) _gl.Uniform3(_uwBk, m.Bk0, m.Bk1, m.Bk2);
         if (_uwLcmR >= 0) _gl.Uniform3(_uwLcmR, m.L0, m.L1, m.L2);
@@ -377,6 +379,61 @@ public sealed partial class GlCore
     /// passes are pulled by each instance's own, and the true depth is put back after.
     /// </summary>
     void DrawInstances(List<RetainedScene.ModelInstance> list, int slot)
+    {
+        int front = 0;
+        for (int i = 0; i < list.Count; i++) if (list[i].Front) front++;
+        if (front > 0)
+        {
+            if (front < list.Count)
+            {
+                var back = new List<RetainedScene.ModelInstance>(list.Count - front);
+                for (int i = 0; i < list.Count; i++) if (!list[i].Front) back.Add(list[i]);
+                DrawInstancesBody(back, slot);
+            }
+            var tops = front == list.Count ? list : new List<RetainedScene.ModelInstance>(front);
+            if (front < list.Count)
+                for (int i = 0; i < list.Count; i++) if (list[i].Front) tops.Add(list[i]);
+            DrawInFront(tops, slot);
+            return;
+        }
+        DrawInstancesBody(list, slot);
+    }
+
+    /// <summary>The share of its view depth a front instance is written at: nearer than
+    /// the chest it hangs over, and past the nearest thing the eye can see.</summary>
+    const float FrontScale = 0.5f;
+
+    /// <summary>A model the table put in front of the world. Depth-tested, the chest
+    /// it was sitting on eats it, because that chest is closer to the eye. Forcing
+    /// the test to pass fixed that, and painted the grip over the board on every
+    /// side: the faces no longer hid one another, so the handle stayed on the front
+    /// while the board turned. Scaling the depth toward the eye keeps the whole item
+    /// in front of the chest, and the faces depth-test against each other, so the
+    /// grip is the near side when the turn brings it round. The occlusion pass then
+    /// reads the item, not the chest under it. The pull is a scale, not an offset: a
+    /// held item is so near the eye that an offset of any use clamps every face to
+    /// depth 0, they tie, and the last one drawn (the board) hides the grip.</summary>
+    void DrawInFront(List<RetainedScene.ModelInstance> list, int slot)
+    {
+        _gl.Disable(EnableCap.CullFace);
+        BeginInstances(slot, true);
+        if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, 0f);
+        if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
+        if (_uwDepthScale >= 0) _gl.Uniform1(_uwDepthScale, FrontScale);
+        _gl.DepthFunc(DepthFunction.Lequal);
+        _gl.DepthMask(true);
+        foreach (var m in list)
+        {
+            if (m.MeshGen != _meshGen || m.MeshCount <= 0) continue;
+            SendInstance(m, true);
+            _gl.DrawArrays(PrimitiveType.Triangles, m.MeshStart, (uint)m.MeshCount);
+            RetainedScene.InstanceCorners += m.MeshCount;
+        }
+        if (_uwDepthScale >= 0) _gl.Uniform1(_uwDepthScale, 1f);
+        EndInstances(true);
+    }
+
+    void DrawInstancesBody(List<RetainedScene.ModelInstance> list, int slot)
     {
         _gl.Disable(EnableCap.CullFace);
         BeginInstances(slot, true);
@@ -729,11 +786,30 @@ public sealed partial class GlCore
         int slot = f.Serial & (ModelRing - 1);
         if (f.Instances.Count == 0 || _uwnModel < 0 || _mvSerial[slot] != f.Serial || _mvGen[slot] != _meshGen) return;
         BeginInstances(slot, false);
+        bool front = false;
         foreach (var m in f.Instances)
         {
             if (m.MeshGen != _meshGen) continue;
+            // A picked-up item is drawn over the chest. Its own plane would be the
+            // chest's, because the hold keeps the chest's depth, and the passes
+            // would then murk and reflect the chest through the item. An overlay
+            // covers whatever is under it, as the arm does.
+            if (m.Front) { front = true; continue; }
             SendInstance(m, false);
             _gl.DrawArrays(PrimitiveType.Triangles, m.MeshStart, (uint)m.MeshCount);
+        }
+        if (front)
+        {
+            if (_uwnDepthCull >= 0) _gl.Uniform1(_uwnDepthCull, 0);
+            foreach (var m in f.Instances)
+            {
+                if (!m.Front || m.MeshGen != _meshGen) continue;
+                var o = m;
+                o.Material = SurfaceMaterial.Overlay;
+                SendInstance(o, false);
+                _gl.DrawArrays(PrimitiveType.Triangles, o.MeshStart, (uint)o.MeshCount);
+            }
+            if (_uwnDepthCull >= 0) _gl.Uniform1(_uwnDepthCull, 1);
         }
         EndInstances(false);
     }

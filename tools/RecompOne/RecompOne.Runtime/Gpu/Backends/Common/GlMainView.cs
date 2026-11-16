@@ -38,7 +38,7 @@ public sealed partial class GlCore
         _uwCueFromZ = _gl.GetUniformLocation(_progWorld, "uCueFromZ");
         _uwCueAtCorners = _gl.GetUniformLocation(_progWorld, "uCueAtCorners");
         int L(string n) => _gl.GetUniformLocation(_progWorld, n);
-        _uwDepthBias = L("uDepthBias"); _uwDepthSlope = L("uDepthSlope"); _uwDepthOnly = L("uDepthOnly"); _uwDepthCap = L("uDepthCap"); _uwDepthCapZ = L("uDepthCapZ");
+        _uwDepthBias = L("uDepthBias"); _uwDepthSlope = L("uDepthSlope"); _uwDepthOnly = L("uDepthOnly"); _uwDepthCap = L("uDepthCap"); _uwDepthCapZ = L("uDepthCapZ"); _uwDepthScale = L("uDepthScale");
         _uwDepthPull = L("uDepthPull");
         _uwOtzBury = L("uOtzBury"); _uwWorldDepth = L("uWorldDepth");
         _uwOpaqueDepth = L("uOpaqueDepth"); _uwSwellOn = L("uSwellOn"); _uwSwell = L("uSwell");
@@ -82,7 +82,7 @@ public sealed partial class GlCore
     bool _wMips;
     // The view depth the normal pass's last water slice reached.
     float _wDone;
-    int _uwOtzBury = -1, _uwWorldDepth = -1;
+    int _uwDepthScale = -1, _uwOtzBury = -1, _uwWorldDepth = -1;
     uint _otzTex, _otzFbo;
     int _otzW, _otzH;
 
@@ -828,9 +828,24 @@ public sealed partial class GlCore
             EnterModels();
             SendInstance(m, true);
             if (!RetainedScene.BlendDepth) _gl.Disable(EnableCap.DepthTest);
+            // A held item's blended faces take the same pull as its opaque ones.
+            bool pulled = m.Front && blend >= 0 && _uwDepthBias >= 0 && _uwDepthScale >= 0;
+            if (pulled)
+            {
+                _gl.Uniform1(_uwDepthBias, 0f);
+                _gl.Uniform1(_uwDepthScale, FrontScale);
+                if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
+            }
             int from = _bIdxAt[a], to = b < _bEntCount ? _bIdxAt[b] : _bIdxCount;
             if (blend >= 0) DrawBlended(blend, to - from, from * 4L);
             else unsafe { _gl.DrawElements(PrimitiveType.Triangles, (uint)(to - from), DrawElementsType.UnsignedInt, (void*)(from * 4L)); }
+            if (pulled)
+            {
+                bool bias = GteDepth.ZBuffer && (GteDepth.DepthBias > 0f || GteDepth.DepthSlope > 0f);
+                _gl.Uniform1(_uwDepthScale, 1f);
+                _gl.Uniform1(_uwDepthBias, bias ? GteDepth.DepthBias / 65536f : 0f);
+                if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, bias ? GteDepth.DepthSlope : 0f);
+            }
             if (!RetainedScene.BlendDepth) _gl.Enable(EnableCap.DepthTest);
             RetainedScene.BlendRuns++;
         }

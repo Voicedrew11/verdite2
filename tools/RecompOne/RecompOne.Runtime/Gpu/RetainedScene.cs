@@ -1217,6 +1217,10 @@ public static class RetainedScene
         /// camera, against other models at its true depth. 0, the default, is none. The
         /// main view only.</summary>
         public float DepthPull;
+        /// <summary>Drawn after the other models with its depth scaled toward the eye.
+        /// A picked-up item sits at the barrel's depth, and testing it there hides it
+        /// inside the barrel; on the console its table slot put it in front.</summary>
+        public bool Front;
     }
 
     /// <summary>0085. A mesh corner's <see cref="Vertex.Light"/>: the low 24 bits are its

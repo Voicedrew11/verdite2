@@ -1879,7 +1879,7 @@ internal static class GlShaders
             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
             vClipped = z < uNear ? 1.0 : 0.0;
             // The arm is placed in view space and the sky has no depth. Neither
-            // borrows a wall pixel.
+            // borrows a wall pixel. A held item is pulled by uDepthScale instead.
             if (uModel != 0 && uModelSky == 0 && uModelView == 0)
                 vModelEye = modelOriginEye();
 
@@ -2113,6 +2113,10 @@ internal static class GlShaders
         uniform float uDepthSlope;
         // The tolerance probe's ceiling on the tolerance (RetainedScene.ToleranceProbe).
         uniform float uDepthCap = 1.0e9;
+        // The depth written is the view depth times this: 1 for the world, under 1 for a held
+        // item, which then sits in front of what it hangs over while its own faces keep their
+        // order (an absolute pull clamps to 0 at that range, and the last face drawn wins).
+        uniform float uDepthScale = 1.0;
         // The map's depth, copied before models draw. A model pixel behind a wall
         // is drawn when the ray through the model's origin meets the map behind
         // the origin (0 leaves the test off). That does not change as the camera
@@ -2665,7 +2669,7 @@ internal static class GlShaders
             // game pixels' width there (z / H each), so the term stops at that.
             if (uDepthCapZ > 0.0) dz = min(dz, uDepthBias + vDepth * uDepthCapZ);
             dz = min(dz, uDepthCap) + uDepthPull;
-            float zd = vDepth > 0.0 ? max(vDepth - dz, 0.0) : 1.0;
+            float zd = vDepth > 0.0 ? max(vDepth * uDepthScale - dz, 0.0) : 1.0;
             if (vModelEye.z > 0.0 && uOtzBury > 0.0) {
                 float wall = texelFetch(uWorldDepth, ivec2(gl_FragCoord.xy), 0).r;
                 vec2 game = uClipCentre + vec2(uClipH) * vModelEye.xy / vModelEye.z;
