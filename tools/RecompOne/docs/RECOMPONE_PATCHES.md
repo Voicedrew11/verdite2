@@ -2312,9 +2312,10 @@ Four files in the directory have no entry below:
   secret door 257 behind. `ModelInstance.Door` is never pulled (KF2 sets it for its
   doors and secret walls, which slide inside the wall they sit in); `RetainedScene.Bury`
   is the switch. Measured in KF2, by eye: the lid solid at rest from four angles and
-  at the edge of view, the barrel in the next room hidden, the plant's leaf behind
-  its wall, the floor behind a secret wall no longer drawn on it. **Not looked at:**
-  the lid mid-swing, a monster pressed against a wall. **No recompile.**
+  at the edge of view and mid-swing, the barrel in the next room hidden, the plant's
+  leaf behind its wall, the floor behind a secret wall no longer drawn on it, monsters
+  pressed against walls whole, and #53's pedestal item and merchant whole.
+  **No recompile.**
 
 ## Package bumps
 
