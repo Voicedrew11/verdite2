@@ -4012,8 +4012,13 @@ at `12df02b`); stands down while that mod is enabled.
 | L2, R2 | nothing |
 | the sticks | walk and strafe, turn and look (twin stick; 3D controls are set aside) |
 
-Keyboard: unchanged (Space swings, Q casts, A/D strafe), plus 1-5 to use a hotkey, X to
-swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
+Keyboard: unchanged (Space swings, Q casts, A/D strafe), plus 1 to swap the weapon, 2 the
+spell, 3 to step to the next hotkey and R to use the current one (the pad's d-pad Right,
+Left, Down and Square), all rebindable. A hotkey can also be given a key that uses it
+directly; none has one by default (it was 1-5, with X and Z the hands, until the four
+were put on 1-3 and R). R is the left hand's reach from WASD between Q (cast) and F
+(use), free in the layout since L2 left the keyboard, and where Dark Souls III and
+Elden Ring put "use item"; 4 is a stretch off movement, and E is the editor's. Menus keep the pad as it was.
 
 - **What a hand has out is the game's own equipment.** The weapon out is the weapon
   byte `0x801994AF`, swapped through the game's own equip `func_80026210(id)` (the

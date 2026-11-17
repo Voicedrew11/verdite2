@@ -15,8 +15,9 @@ namespace Kf2.Shortcuts;
 /// game's Select shortcut five times over, from the Shortcuts mod (kf2.shortcuts) of
 /// PerdueEgg's verdite2-mods. On the pad (<see cref="PadLayout"/>): R1 swings, L1 casts,
 /// Square uses the current hotkey, d-pad Right and Left swap the right and left hands,
-/// Down and Up cycle the hotkeys, and the sticks move. On the keyboard: keys 1-5 use a
-/// hotkey, X and Z swap the hands. Drawn bottom left (<see cref="HandsHud"/>). Stands
+/// Down and Up cycle the hotkeys, and the sticks move. On the keyboard: 1 swaps the
+/// weapon, 2 the spell, 3 steps to the next hotkey and R uses the current one; each
+/// hotkey can also be given a key of its own (none by default). Drawn bottom left (<see cref="HandsHud"/>). Stands
 /// down while the mod is enabled. See "Shortcuts" in docs/PATCHES_AND_MODS.md.
 ///
 ///     KF2_SHORTCUTS=0|1       off or on for the run (Gameplay ▸ Shortcuts)
@@ -108,9 +109,13 @@ public static class Shortcuts
     public const string FadeKey = "kf2.shortcuts.fade";
     public const string WeaponKeyKey = "kf2.shortcuts.keyweapon";
     public const string SpellKeyKey = "kf2.shortcuts.keyspell";
+    public const string NextHotkeyKeyKey = "kf2.shortcuts.keynext";
+    public const string UseHotkeyKeyKey = "kf2.shortcuts.keyuse";
     public static string KeyKey(int i) => $"kf2.shortcuts.key{i + 1}";
 
-    static readonly Key[] DefaultKeys = [Key.Number1, Key.Number2, Key.Number3, Key.Number4, Key.Number5];
+    /// <summary>No hotkey has a key of its own by default: 1-3 are the hands and the
+    /// step, R the use.</summary>
+    static readonly Key[] DefaultKeys = [Key.Unknown, Key.Unknown, Key.Unknown, Key.Unknown, Key.Unknown];
 
     /// <summary>Off by default: not yet played in the port.</summary>
     public static bool Enabled { get; set; }
@@ -123,11 +128,18 @@ public static class Shortcuts
     public static readonly Key[] Keys = new Key[Count];
 
     /// <summary>The keys that swap the right hand (weapons) and the left (spells).</summary>
-    public static Key WeaponKey { get; set; } = Key.X;
-    public static Key SpellKey { get; set; } = Key.Z;
+    public static Key WeaponKey { get; set; } = Key.Number1;
+    public static Key SpellKey { get; set; } = Key.Number2;
 
-    /// <summary>The settings page's key rows: the five hotkeys, then the two hands.</summary>
-    public const int KeyRows = Count + 2, WeaponRow = Count, SpellRow = Count + 1;
+    /// <summary>The keys that step to the next hotkey holding something, and use the
+    /// current one (the pad's d-pad Down and Square).</summary>
+    public static Key NextHotkeyKey { get; set; } = Key.Number3;
+    public static Key UseHotkeyKey { get; set; } = Key.R;
+
+    /// <summary>The settings page's key rows: the five hotkeys, the two hands, then the
+    /// step and the use.</summary>
+    public const int KeyRows = Count + 4, WeaponRow = Count, SpellRow = Count + 1,
+                     NextHotkeyRow = Count + 2, UseHotkeyRow = Count + 3;
 
     /// <summary>A key row (<see cref="KeyRows"/>) whose key the settings page is waiting
     /// for, or -1.</summary>
@@ -224,6 +236,8 @@ public static class Shortcuts
             for (int i = 0; i < Count; i++) Keys[i] = ReadKey(view.GetString(KeyKey(i), DefaultKeys[i].ToString()));
             WeaponKey = ReadKey(view.GetString(WeaponKeyKey, WeaponKey.ToString()));
             SpellKey = ReadKey(view.GetString(SpellKeyKey, SpellKey.ToString()));
+            NextHotkeyKey = ReadKey(view.GetString(NextHotkeyKeyKey, NextHotkeyKey.ToString()));
+            UseHotkeyKey = ReadKey(view.GetString(UseHotkeyKeyKey, UseHotkeyKey.ToString()));
         });
         Event.AddListener<VSyncEvent>(_ => Latch());
         PadLayout.Install();
@@ -238,6 +252,8 @@ public static class Shortcuts
     {
         WeaponRow => WeaponKey,
         SpellRow => SpellKey,
+        NextHotkeyRow => NextHotkeyKey,
+        UseHotkeyRow => UseHotkeyKey,
         _ => Keys[row],
     };
 
@@ -248,6 +264,8 @@ public static class Shortcuts
         {
             case WeaponRow: WeaponKey = key; break;
             case SpellRow: SpellKey = key; break;
+            case NextHotkeyRow: NextHotkeyKey = key; break;
+            case UseHotkeyRow: UseHotkeyKey = key; break;
             default: Keys[row] = key; break;
         }
     }
@@ -256,6 +274,8 @@ public static class Shortcuts
     {
         WeaponRow => WeaponKeyKey,
         SpellRow => SpellKeyKey,
+        NextHotkeyRow => NextHotkeyKeyKey,
+        UseHotkeyRow => UseHotkeyKeyKey,
         _ => KeyKey(row),
     };
 
@@ -420,6 +440,7 @@ public static class Shortcuts
             else CrossFeedback.Refused(c, m, CrossFeedback.Card.Magic);
         }
         int steps = PadLayout.Take(PadLayout.Press.NextHotkey) - PadLayout.Take(PadLayout.Press.PreviousHotkey)
+                    + (Fired(NextHotkeyRow) ? 1 : 0)
                     + (Asked(PadLayout.Press.NextHotkey) ? 1 : 0) - (Asked(PadLayout.Press.PreviousHotkey) ? 1 : 0);
         if (steps != 0)
         {
@@ -429,7 +450,8 @@ public static class Shortcuts
         HandsHud.Prepare(c, m, _probe);
 
         int fire = Array.FindIndex(_latch, 0, Count, l => l > 0);
-        if (PadLayout.Take(PadLayout.Press.UseHotkey) > 0 | Asked(PadLayout.Press.UseHotkey)) fire = _hotkey;
+        if (PadLayout.Take(PadLayout.Press.UseHotkey) > 0 | Fired(UseHotkeyRow) | Asked(PadLayout.Press.UseHotkey))
+            fire = _hotkey;
         Array.Clear(_latch);
         if (fire < 0) return;
         if (_probe) Console.WriteLine($"[KF2] shortcuts: hotkey {fire + 1} used");

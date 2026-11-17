@@ -39,15 +39,15 @@ static class Labels
         return Name(m, spell, item) ?? Word("empty", "Empty");
     }
 
-    /// <summary>Hotkey <paramref name="row"/>'s label: its key with keyboard labels, its
-    /// number with controller ones (the pad cycles them, so a row has no button). Row 0
+    /// <summary>Hotkey <paramref name="row"/>'s label: its key with keyboard labels (its
+    /// number when it has none), its number with controller ones (the pad cycles them, so a row has no button). Row 0
     /// is the game's Select. Normal case: <see cref="Word"/> puts it in capitals when the
     /// font has no lowercase.</summary>
     internal static string Label(int row)
     {
         if (!Shortcuts.KeyboardLabels) return $"Hotkey {row + 1}";
-        if (row == 0 && Shortcuts.Keys[0] == Key.Unknown) return SelectKeyLabel();
-        return KeyLabel(Shortcuts.Keys[row]);
+        if (Shortcuts.Keys[row] != Key.Unknown) return KeyLabel(Shortcuts.Keys[row]);
+        return row == 0 ? SelectKeyLabel() : $"Hotkey {row + 1}";
     }
 
     /// <summary>What hotkey <paramref name="row"/> holds, as spell and item ids.</summary>

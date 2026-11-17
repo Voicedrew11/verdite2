@@ -118,6 +118,8 @@ public sealed class ShortcutsPage : IPatchPage
     {
         Sc.WeaponRow => "Swap weapon:",
         Sc.SpellRow => "Swap spell:",
+        Sc.NextHotkeyRow => "Next hotkey:",
+        Sc.UseHotkeyRow => "Use hotkey:",
         0 => "Hotkey 1 (Select):",
         _ => $"Hotkey {row + 1}:",
     };
