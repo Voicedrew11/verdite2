@@ -148,6 +148,7 @@ public sealed partial class GlCore : IGpuBackend
     bool _kTransparent;
     int _kImage = -1;
     int _kBlend, _kSetMask, _kCheckMask;
+    byte _kOpacity;                                  // 0126; 0 none
     int _kZMode;
     // 0048. The BK/LCM generation the batch's directional triangles were lit with; -1 none.
     int _kLightGen = -1;
@@ -783,7 +784,7 @@ public sealed partial class GlCore : IGpuBackend
                                         || _kRepScroll != _pendingRepScroll)))
             return FlushReason.StateReplacement;
         if (_kTransparent != transparent) return FlushReason.StateSemi;
-        if (_kBlend != blend) return FlushReason.StateBlend;
+        if (_kBlend != blend || _kOpacity != _pendingOpacity) return FlushReason.StateBlend;
         if (_kImage != image) return FlushReason.StateImage;
         if (_kZMode != zMode) return FlushReason.StateDepthMode;
         if (_kSetMask != (_env.SetMask ? 1 : 0) || _kCheckMask != (_env.CheckMask ? 1 : 0)) return FlushReason.StateMask;
@@ -801,7 +802,7 @@ public sealed partial class GlCore : IGpuBackend
                                         && _kRepW == _pendingRepW && _kRepH == _pendingRepH
                                         && _kRepScroll == _pendingRepScroll))
             && _kTransparent == transparent && _kBlend == blend && _kImage == image
-            && _kZMode == zMode
+            && _kOpacity == _pendingOpacity && _kZMode == zMode
             && _kSetMask == (_env.SetMask ? 1 : 0) && _kCheckMask == (_env.CheckMask ? 1 : 0)
             && _kTwAndX == twAndX && _kTwAndY == twAndY && _kTwOrX == twOrX && _kTwOrY == twOrY
             && _kClipX0 == _env.ClipX0 && _kClipY0 == _env.ClipY0 && _kClipX1 == _env.ClipX1 && _kClipY1 == _env.ClipY1;
@@ -812,6 +813,7 @@ public sealed partial class GlCore : IGpuBackend
         bool transparent = f.SemiTrans;
         int blend = f.BlendMode;
         int image = f.UseImage ? f.Image : -1;
+        _pendingOpacity = f.Opacity;
         var target = Classify();
         if (_count > 0)
         {
@@ -825,6 +827,7 @@ public sealed partial class GlCore : IGpuBackend
         _kTarget = target;
         _kImage = image;
         _kTransparent = transparent; _kBlend = blend;
+        _kOpacity = _pendingOpacity;
         _kZMode = zMode;
         _kSetMask = _env.SetMask ? 1 : 0; _kCheckMask = _env.CheckMask ? 1 : 0;
         _kTwAndX = ~(_env.TwMaskX * 8) & 0xFF; _kTwAndY = ~(_env.TwMaskY * 8) & 0xFF;
@@ -835,6 +838,7 @@ public sealed partial class GlCore : IGpuBackend
         _kRepScroll = _pendingRepScroll;
     }
 
+    byte _pendingOpacity;
     uint _pendingRepTex, _pendingRepClut;
     int _pendingRepClutCount = 16;
     float _pendingRepX, _pendingRepY, _pendingRepW = 1, _pendingRepH = 1, _pendingRepScroll = -1;
@@ -2147,6 +2151,25 @@ public sealed partial class GlCore : IGpuBackend
         if (_legacy)
         {
             _gl.Disable(EnableCap.Blend);
+            DrawTested(rt, zBias, first, _count, true);
+        }
+        else if (_kOpacity != 0 && !(_kTransparent && _kBlend == 2))
+        {
+            // 0126. The port's opacity times the packet's own coverage: an opaque texel
+            // is a * src + (1 - a) * dst; a blended one keeps its mode with its source
+            // scaled by a (half and half is 0.5a and 1 - 0.5a, so at a = 1 it is the
+            // game's). Subtractive packets keep the game's path.
+            float a = _kOpacity / 255f;
+            _gl.Enable(EnableCap.Blend);
+            _gl.BlendFuncSeparate(BlendingFactor.Src1Color, BlendingFactor.Src1Alpha, BlendingFactor.One, BlendingFactor.Zero);
+            _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
+            if (_kTransparent)
+            {
+                float src = _kBlend switch { 0 => 0.5f, 3 => 0.25f, _ => 1f };
+                SetBlend(src * a, _kBlend == 0 ? 1f - 0.5f * a : 1f);
+            }
+            else SetBlend(a, 1f - a);
+            _gl.Uniform4(_uBlendOpaque, a, a, a, 1f - a);
             DrawTested(rt, zBias, first, _count, true);
         }
         else if (!_kTransparent)

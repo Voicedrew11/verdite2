@@ -1,0 +1,203 @@
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+index 2b2b927..959d45c 100644
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+@@ -148,6 +148,7 @@ public sealed partial class GlCore : IGpuBackend
+     bool _kTransparent;
+     int _kImage = -1;
+     int _kBlend, _kSetMask, _kCheckMask;
++    byte _kOpacity;                                  // 0126; 0 none
+     int _kZMode;
+     // 0048. The BK/LCM generation the batch's directional triangles were lit with; -1 none.
+     int _kLightGen = -1;
+@@ -783,7 +784,7 @@ public sealed partial class GlCore : IGpuBackend
+                                         || _kRepScroll != _pendingRepScroll)))
+             return FlushReason.StateReplacement;
+         if (_kTransparent != transparent) return FlushReason.StateSemi;
+-        if (_kBlend != blend) return FlushReason.StateBlend;
++        if (_kBlend != blend || _kOpacity != _pendingOpacity) return FlushReason.StateBlend;
+         if (_kImage != image) return FlushReason.StateImage;
+         if (_kZMode != zMode) return FlushReason.StateDepthMode;
+         if (_kSetMask != (_env.SetMask ? 1 : 0) || _kCheckMask != (_env.CheckMask ? 1 : 0)) return FlushReason.StateMask;
+@@ -801,7 +802,7 @@ public sealed partial class GlCore : IGpuBackend
+                                         && _kRepW == _pendingRepW && _kRepH == _pendingRepH
+                                         && _kRepScroll == _pendingRepScroll))
+             && _kTransparent == transparent && _kBlend == blend && _kImage == image
+-            && _kZMode == zMode
++            && _kOpacity == _pendingOpacity && _kZMode == zMode
+             && _kSetMask == (_env.SetMask ? 1 : 0) && _kCheckMask == (_env.CheckMask ? 1 : 0)
+             && _kTwAndX == twAndX && _kTwAndY == twAndY && _kTwOrX == twOrX && _kTwOrY == twOrY
+             && _kClipX0 == _env.ClipX0 && _kClipY0 == _env.ClipY0 && _kClipX1 == _env.ClipX1 && _kClipY1 == _env.ClipY1;
+@@ -812,6 +813,7 @@ public sealed partial class GlCore : IGpuBackend
+         bool transparent = f.SemiTrans;
+         int blend = f.BlendMode;
+         int image = f.UseImage ? f.Image : -1;
++        _pendingOpacity = f.Opacity;
+         var target = Classify();
+         if (_count > 0)
+         {
+@@ -825,6 +827,7 @@ public sealed partial class GlCore : IGpuBackend
+         _kTarget = target;
+         _kImage = image;
+         _kTransparent = transparent; _kBlend = blend;
++        _kOpacity = _pendingOpacity;
+         _kZMode = zMode;
+         _kSetMask = _env.SetMask ? 1 : 0; _kCheckMask = _env.CheckMask ? 1 : 0;
+         _kTwAndX = ~(_env.TwMaskX * 8) & 0xFF; _kTwAndY = ~(_env.TwMaskY * 8) & 0xFF;
+@@ -835,6 +838,7 @@ public sealed partial class GlCore : IGpuBackend
+         _kRepScroll = _pendingRepScroll;
+     }
+ 
++    byte _pendingOpacity;
+     uint _pendingRepTex, _pendingRepClut;
+     int _pendingRepClutCount = 16;
+     float _pendingRepX, _pendingRepY, _pendingRepW = 1, _pendingRepH = 1, _pendingRepScroll = -1;
+@@ -2149,6 +2153,25 @@ public sealed partial class GlCore : IGpuBackend
+             _gl.Disable(EnableCap.Blend);
+             DrawTested(rt, zBias, first, _count, true);
+         }
++        else if (_kOpacity != 0 && !(_kTransparent && _kBlend == 2))
++        {
++            // 0126. The port's opacity times the packet's own coverage: an opaque texel
++            // is a * src + (1 - a) * dst; a blended one keeps its mode with its source
++            // scaled by a (half and half is 0.5a and 1 - 0.5a, so at a = 1 it is the
++            // game's). Subtractive packets keep the game's path.
++            float a = _kOpacity / 255f;
++            _gl.Enable(EnableCap.Blend);
++            _gl.BlendFuncSeparate(BlendingFactor.Src1Color, BlendingFactor.Src1Alpha, BlendingFactor.One, BlendingFactor.Zero);
++            _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
++            if (_kTransparent)
++            {
++                float src = _kBlend switch { 0 => 0.5f, 3 => 0.25f, _ => 1f };
++                SetBlend(src * a, _kBlend == 0 ? 1f - 0.5f * a : 1f);
++            }
++            else SetBlend(a, 1f - a);
++            _gl.Uniform4(_uBlendOpaque, a, a, a, 1f - a);
++            DrawTested(rt, zBias, first, _count, true);
++        }
+         else if (!_kTransparent)
+         {
+             _gl.Disable(EnableCap.Blend);
+diff --git a/RecompOne.Runtime/Gpu/GpuHleForward.cs b/RecompOne.Runtime/Gpu/GpuHleForward.cs
+index 1cf6a9b..129a1fa 100644
+--- a/RecompOne.Runtime/Gpu/GpuHleForward.cs
++++ b/RecompOne.Runtime/Gpu/GpuHleForward.cs
+@@ -37,8 +37,12 @@ public sealed partial class Gpu
+     PrimFlags PrimOf(bool tex, bool semi, bool raw, int clut, bool gouraud = false) => new()
+     {
+         Textured = tex, SemiTrans = semi, RawTexture = raw, Gouraud = gouraud, TPage = (ushort)CurTPage(), Clut = (ushort)clut,
++        Opacity = _primOpacity,
+     };
+ 
++    // 0126. The opacity PacketOpacity gave the polygon being drawn; 0 outside one.
++    byte _primOpacity;
++
+     void HleTri(in Vert a, in Vert b, in Vert c, bool tex, bool gouraud, bool semi, bool raw, int clut)
+     {
+         int spanX = Math.Max(a.X, Math.Max(b.X, c.X)) - Math.Min(a.X, Math.Min(b.X, c.X));
+diff --git a/RecompOne.Runtime/Gpu/GpuRaster.cs b/RecompOne.Runtime/Gpu/GpuRaster.cs
+index c9d8325..b26da0b 100644
+--- a/RecompOne.Runtime/Gpu/GpuRaster.cs
++++ b/RecompOne.Runtime/Gpu/GpuRaster.cs
+@@ -264,8 +264,10 @@ public sealed partial class Gpu
+ 
+         if (HleOn)
+         {
++            _primOpacity = PacketOpacity.Any ? PacketOpacity.Take(_fifoSrc[0], _fifo[0], _fifo[vwAt[0]]) : (byte)0;
+             HleTri(v[0], v[1], v[2], tex, gouraud, semi, raw, clut);
+             if (quad) HleTri(v[1], v[2], v[3], tex, gouraud, semi, raw, clut);
++            _primOpacity = 0;
+         }
+         else if (!NoRaster)
+         {
+diff --git a/RecompOne.Runtime/Gpu/Hle/HleTypes.cs b/RecompOne.Runtime/Gpu/Hle/HleTypes.cs
+index 9e696df..58887ad 100644
+--- a/RecompOne.Runtime/Gpu/Hle/HleTypes.cs
++++ b/RecompOne.Runtime/Gpu/Hle/HleTypes.cs
+@@ -44,6 +44,9 @@ public struct PrimFlags
+     public int OtIndex;
+     public bool UseImage;
+     public int Image;
++    // 0126. The port's opacity for the packet (PacketOpacity), 1-254 of 255; 0 draws
++    // it as the game made it.
++    public byte Opacity;
+ 
+     public readonly int BlendMode => (TPage >> 5) & 3;
+ }
+diff --git a/RecompOne.Runtime/Gpu/PacketOpacity.cs b/RecompOne.Runtime/Gpu/PacketOpacity.cs
+new file mode 100644
+index 0000000..2790da5
+--- /dev/null
++++ b/RecompOne.Runtime/Gpu/PacketOpacity.cs
+@@ -0,0 +1,71 @@
++namespace RecompOne.Runtime;
++
++/// <summary>
++/// 0126. An opacity a port gives one of the packets it built, so a HUD can fade
++/// smoothly: the PlayStation blends only in four fixed modes, and on a textured face
++/// only the texels whose STP bit is set, so a face cannot be made 30% visible in the
++/// packet itself. The port records the packet's address, its command word and its
++/// first vertex word; the GPU takes the record when it draws that packet, checks both
++/// words, and the GL backend draws the polygon as <c>src * a + dst * (1 - a)</c> on
++/// every texel, whatever the packet's own blend. A record is taken once: a packet
++/// redrawn later, or a stale record at an address reused for something else, draws
++/// as the game made it. The software rasterizer ignores it.
++///
++/// Thread: <see cref="Set"/> and <see cref="Clear"/> from the game thread, which is
++/// also where the GPU walks the ordering table; a lock keeps a host-thread caller safe.
++/// </summary>
++public static class PacketOpacity
++{
++    struct Rec { public uint Cmd, Xy0; public byte Alpha; }
++
++    static readonly Dictionary<uint, Rec> _recs = new();
++    static readonly object _sync = new();
++    static volatile bool _any;
++
++    /// <summary>Packets drawn at a recorded opacity since boot; a probe's.</summary>
++    public static long Drawn;
++
++    /// <summary>A record waits to be drawn.</summary>
++    public static bool Any => _any;
++
++    /// <summary>The packet at <paramref name="packet"/> (its tag word), whose command
++    /// word and first vertex word are given, drawn at <paramref name="alpha"/>/255.
++    /// An alpha of 255 or 0 drops any record there.</summary>
++    public static void Set(uint packet, uint cmd, uint xy0, byte alpha)
++    {
++        uint key = Key(packet + 4);
++        lock (_sync)
++        {
++            if (alpha is 0 or 255) _recs.Remove(key);
++            else _recs[key] = new Rec { Cmd = cmd, Xy0 = xy0, Alpha = alpha };
++            _any = _recs.Count > 0;
++        }
++    }
++
++    /// <summary>Drops every record not yet drawn.</summary>
++    public static void Clear()
++    {
++        lock (_sync)
++        {
++            _recs.Clear();
++            _any = false;
++        }
++    }
++
++    /// <summary>The opacity of the packet whose command word was read from
++    /// <paramref name="cmdAddress"/>, or 0 (the game's own) when none is recorded or
++    /// the words differ; the record is used up either way.</summary>
++    internal static byte Take(uint cmdAddress, uint cmd, uint xy0)
++    {
++        lock (_sync)
++        {
++            if (!_recs.Remove(Key(cmdAddress), out var r)) return 0;
++            _any = _recs.Count > 0;
++            if (r.Cmd != cmd || r.Xy0 != xy0) return 0;
++            Drawn++;
++            return r.Alpha;
++        }
++    }
++
++    static uint Key(uint address) => address & 0x1FFFFFFFu;
++}

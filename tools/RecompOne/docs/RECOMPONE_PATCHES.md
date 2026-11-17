@@ -2284,6 +2284,19 @@ Four files in the directory have no entry below:
   valid inside `PadButtons`). The word itself is unchanged. KF2's Souls layout
   (`Shortcuts`) counts d-pad presses without them, so pushing the stick no longer
   swaps a hand or cycles a hotkey. **No recompile.**
+- `0126-packet-opacity.patch` — an opacity a port gives one of its packets.
+  The PlayStation blends in four fixed modes, and on a textured face only the texels
+  with the STP bit set, so a HUD built of the game's own packets cannot fade
+  smoothly: KF2's Shortcuts cross, faded with the semi-transparent bit, stayed solid,
+  because its model textures have no STP texels. `PacketOpacity.Set(packet, cmd, xy0,
+  alpha)` records an alpha (1-254) by the packet's address with its command word and
+  first vertex word; `DrawPolygon` takes the record (once, and only if both words
+  match) into `PrimFlags.Opacity`, and `GlCore` keys batches on it and draws them as
+  `a * src + (1 - a) * dst` through the existing dual-source blend: an opaque texel
+  at `a`, a blended one keeping its mode with its source scaled by `a` (mode 0 is
+  `0.5a` and `1 - 0.5a`, so `a = 1` is the game's). Subtractive packets and the
+  legacy blend path keep the game's blend; the software rasterizer ignores it.
+  `PacketOpacity.Drawn` counts the packets drawn faded. **No recompile.**
 
 ## Package bumps
 

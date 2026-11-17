@@ -44,6 +44,9 @@ public struct PrimFlags
     public int OtIndex;
     public bool UseImage;
     public int Image;
+    // 0126. The port's opacity for the packet (PacketOpacity), 1-254 of 255; 0 draws
+    // it as the game made it.
+    public byte Opacity;
 
     public readonly int BlendMode => (TPage >> 5) & 3;
 }

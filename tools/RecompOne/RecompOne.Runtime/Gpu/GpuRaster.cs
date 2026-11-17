@@ -264,8 +264,10 @@ public sealed partial class Gpu
 
         if (HleOn)
         {
+            _primOpacity = PacketOpacity.Any ? PacketOpacity.Take(_fifoSrc[0], _fifo[0], _fifo[vwAt[0]]) : (byte)0;
             HleTri(v[0], v[1], v[2], tex, gouraud, semi, raw, clut);
             if (quad) HleTri(v[1], v[2], v[3], tex, gouraud, semi, raw, clut);
+            _primOpacity = 0;
         }
         else if (!NoRaster)
         {
