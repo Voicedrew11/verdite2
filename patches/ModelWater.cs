@@ -103,7 +103,7 @@ public static class ModelWater
                 int u = (int)(uv & 0xFF), v = (int)(uv >> 8);
                 u0 = Math.Min(u0, u); v0 = Math.Min(v0, v); u1 = Math.Max(u1, u); v1 = Math.Max(v1, v);
             }
-            if (!OnWaterRect(tpage, u0, v0, u1, v1)) continue;
+            if (!OnWaterRect(tpage, mem.ReadU16(f + 2u), u0, v0, u1, v1)) continue;
             faces++;
             for (int k = 0; k < corners; k++)
             {
@@ -116,7 +116,7 @@ public static class ModelWater
         return (faces, faces > 0 ? hi - lo : 0);
     }
 
-    static bool OnWaterRect(uint tpage, int u0, int v0, int u1, int v1)
+    static bool OnWaterRect(uint tpage, uint clut, int u0, int v0, int u1, int v1)
     {
         int mode = (int)(tpage >> 7) & 3;
         int div = mode == 0 ? 4 : mode == 1 ? 2 : 1;
@@ -126,7 +126,7 @@ public static class ModelWater
         {
             ref var r = ref SurfaceMaterial.Rects[i];
             if (x0 >= r.X + r.W || x1 <= r.X || y0 >= r.Y + r.H || y1 <= r.Y) continue;
-            if (r.Material == SurfaceMaterial.Water) return true;
+            if (r.Material == SurfaceMaterial.Water) return !r.CoolOnly || SurfaceMaterial.CoolPalette((int)clut, mode);
         }
         return false;
     }

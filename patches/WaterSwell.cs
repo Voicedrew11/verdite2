@@ -266,7 +266,8 @@ public static class WaterSwell
         return mesh;
     }
 
-    /// <summary>Semi-transparent, in an averaging blend, textured from a water rect.</summary>
+    /// <summary>Semi-transparent, in an averaging blend, textured from a water rect through
+    /// a cool palette: the lava is the same rect through an orange one.</summary>
     static bool IsWater(PSMemory mem, uint word, uint at, int corners)
     {
         if (((word >> 24) & 2u) == 0) return false;
@@ -280,7 +281,8 @@ public static class WaterSwell
             int u = (int)(uv & 0xFF), v = (int)(uv >> 8);
             u0 = Math.Min(u0, u); v0 = Math.Min(v0, v); u1 = Math.Max(u1, u); v1 = Math.Max(v1, v);
         }
-        return Waves.InRect(tpage, u0, v0, u1, v1);
+        return Waves.InRect(tpage, u0, v0, u1, v1)
+            && SurfaceMaterial.CoolPalette(mem.ReadU16(at + 2u), (int)(tpage >> 7) & 3);
     }
 
     /// <summary>Where a half puts its mesh: the tile's centre, the height times -128

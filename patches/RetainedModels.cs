@@ -1320,7 +1320,7 @@ static class RetainedModels
                 u0 = Math.Min(u0, u); v0 = Math.Min(v0, vv); u1 = Math.Max(u1, u); v1 = Math.Max(v1, vv);
             }
             uint mode = (tpage >> 5) & 3u;
-            bool water = waterOk && OnWaterRect(tpage, u0, v0, u1, v1);
+            bool water = waterOk && OnWaterRect(tpage, clut, u0, v0, u1, v1);
             if (water) { mesh.WaterFaces++; if (semi) mesh.WaterSemiFaces++; }
             var t = new RetainedScene.Vertex
             {
@@ -1390,7 +1390,7 @@ static class RetainedModels
     /// <summary>Whether a face's texels lie on one of the water's rects, whatever its
     /// blend: the surface pass takes it as water in an averaging blend, as
     /// <c>SurfaceMaterial.Classify</c> takes a packet.</summary>
-    static bool OnWaterRect(uint tpage, int u0, int v0, int u1, int v1)
+    static bool OnWaterRect(uint tpage, uint clut, int u0, int v0, int u1, int v1)
     {
         int mode = (int)(tpage >> 7) & 3;
         int div = mode == 0 ? 4 : mode == 1 ? 2 : 1;
@@ -1400,7 +1400,7 @@ static class RetainedModels
         {
             ref var r = ref SurfaceMaterial.Rects[i];
             if (x0 >= r.X + r.W || x1 <= r.X || y0 >= r.Y + r.H || y1 <= r.Y) continue;
-            if (r.Material == SurfaceMaterial.Water) return true;
+            if (r.Material == SurfaceMaterial.Water) return !r.CoolOnly || SurfaceMaterial.CoolPalette((int)clut, mode);
         }
         return false;
     }

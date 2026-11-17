@@ -4488,6 +4488,35 @@ lookup is at the pixel, so a crest shifts its reflection a little, which should 
 as the wave), and whether the wider tolerance lets a surface near the water that is
 not on it take the mirror.
 
+### Lava is not water
+
+The lava rippled, swelled, murked and reflected like the water, because it is drawn
+from the water's own texture. The eight scrolling slots at `0x80192D58` hold the
+same five dest rects in every area, and a dump of the faces that sample them (the
+swell's map meshes, headless, each face's texels averaged through its own CLUT)
+found the water and the lava on one rect, tpage `0x015`, UVs 0,0-63,62, in the same
+averaging blend (command `0x26`, blend 0), told apart only by the palette: clut
+`0x7C98`, the water, at 0.29 0.36 0.48, and clut `0x7DD8`, the lava, at 0.82 0.31
+0.10. A rect, the blend and the page were the whole test of water, so the lava
+passed all three.
+
+So a water rect is water only through a **cool palette**:
+`SurfaceMaterial.CoolPalette` (RecompOne `0130`) sums the palette's entries (all
+sixteen of a 4-bit one, every sixteenth of an 8-bit one, transparent 0 left out) and
+takes it as water when blue is at least red. `Reflections.ReadRects` marks its rects
+`CoolOnly`, and every test of water asks it: `SurfaceMaterial.Classify` (the surface
+buffer, so the march, `Murk` and the planar walk's plane), `PrimFs`'s ripples
+(`coolPalette`, the same sum in the shader), the swell's mesh (`WaterSwell.IsWater`),
+the GPU world's `FlagWater` (`RetainedMap.SurfaceWater`), its planes
+(`RetainedPlanes`), and a model's water (`ModelWater`, `RetainedModels`). The
+scroll's smoothing (`FluidSmoothing`) is left on the lava: it scrolls too.
+
+Measured headless from slot 2, warping area by area: the swell's water positions in
+fdat14 go from 652 to 0 and in fdat20 from 508 to 0, while fdat02 keeps 5174 and
+fdat05 133. `PrimFs` compiles under `glslangValidator`. The GL half (the ripples on
+the lava, the reflection and murk there) cannot run headless and is **not judged by
+eye**; nor is whether every lava face in those areas is now plain.
+
 ## The reflections see past the camera's cull
 
 **Mechanism measured; the picture has not been judged. Off by default**

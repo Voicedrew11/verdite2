@@ -39,6 +39,8 @@ namespace Kf2;
 /// rect. They are published here as <see cref="SurfaceMaterial.Water"/>, translucent
 /// only: the same slots hold the main-hall fire, which is additive, and the
 /// creatures' skins, which are opaque, and the runtime refuses both on the blend.
+/// The lava is drawn from the water's own rect, in the same blend, through an orange
+/// palette; a rect is water only through a cool one (<c>TexRect.CoolOnly</c>).
 /// Published every frame whether or not the smoothing is on, because the smoothing
 /// publishes nothing at or below the tick rate.
 ///
@@ -183,6 +185,7 @@ public static class Reflections
             r.H = h;
             r.Material = SurfaceMaterial.Water;
             r.TranslucentOnly = true;
+            r.CoolOnly = true;
         }
         SurfaceMaterial.RectN = n;
     }

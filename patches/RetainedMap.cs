@@ -352,7 +352,7 @@ public static class RetainedMap
         public int Corners;
         public bool Semi;
         public byte Mat;
-        public uint TPage, Rect;
+        public uint TPage, Rect, Clut;
     }
 
     static PlaneNote[] _notes = new PlaneNote[1024], _notesSpare = new PlaneNote[1024];
@@ -561,13 +561,14 @@ public static class RetainedMap
             px[0] = p.X0; px[1] = p.X1; px[2] = p.X2; px[3] = p.X3;
             py[0] = p.Y0; py[1] = p.Y1; py[2] = p.Y2; py[3] = p.Y3;
             pz[0] = p.Z0; pz[1] = p.Z1; pz[2] = p.Z2; pz[3] = p.Z3;
-            RetainedPlanes.Note(px, py, pz, p.Corners, p.Semi, p.Mat, p.TPage, p.Rect);
+            RetainedPlanes.Note(px, py, pz, p.Corners, p.Semi, p.Mat, p.TPage, p.Rect, p.Clut);
         }
         RetainedPlanes.Finish();
         _publishMs = System.Diagnostics.Stopwatch.GetElapsedTime(at).TotalMilliseconds;
     }
 
-    static void NotePlane(Span<float> px, Span<float> py, Span<float> pz, int corners, bool semi, byte mat, uint tpage, uint rect)
+    static void NotePlane(Span<float> px, Span<float> py, Span<float> pz, int corners, bool semi, byte mat,
+                          uint tpage, uint rect, uint clut)
     {
         if (_noteN == _notes.Length) Array.Resize(ref _notes, _notes.Length * 2);
         int last = corners - 1;
@@ -576,7 +577,7 @@ public static class RetainedMap
             X0 = px[0], X1 = px[1], X2 = px[2], X3 = px[Math.Min(3, last)],
             Y0 = py[0], Y1 = py[1], Y2 = py[2], Y3 = py[Math.Min(3, last)],
             Z0 = pz[0], Z1 = pz[1], Z2 = pz[2], Z3 = pz[Math.Min(3, last)],
-            Corners = corners, Semi = semi, Mat = mat, TPage = tpage, Rect = rect,
+            Corners = corners, Semi = semi, Mat = mat, TPage = tpage, Rect = rect, Clut = clut,
         };
     }
 
@@ -784,7 +785,7 @@ public static class RetainedMap
                     mat = Remaster.Surfaces.TextureId(tex);
                 uint flags = RetainedScene.FlagRect | mat | RetainedScene.HalfFlag(tx, tz, half)
                            | (semi ? RetainedScene.FlagSemi | ((tpage >> 5) & 3u) << 8 : 0u);
-                if (semi && SurfaceWater(tpage, u0, v0, u1, v1)) flags |= RetainedScene.FlagWater;
+                if (semi && SurfaceWater(tpage, clut, u0, v0, u1, v1)) flags |= RetainedScene.FlagWater;
                 // 0085. The corners the swell moves on the packets.
                 uint swell = 0;
                 if (semi)
@@ -808,7 +809,7 @@ public static class RetainedMap
                     tail.Flags |= RetainedScene.FlagQuadTail;
                     Emit(tail, ex, py, ez, px, pz, uv, col, qa, qb, qc, lw, nzs, swell, 1, 3, 2);
                 }
-                NotePlane(px, py, pz, corners, semi, mat, tpage, rect);
+                NotePlane(px, py, pz, corners, semi, mat, tpage, rect, clut);
                 _faces++;
             }
             face = at + ((word >> 6) & 0x3FCu);
@@ -1089,8 +1090,9 @@ public static class RetainedMap
     static bool _checkPacked;
 
     /// <summary>0085. A blended face the reflection pass takes as water: in an averaging
-    /// blend and on one of the water's rects, as SurfaceMaterial.Classify takes a packet.</summary>
-    static bool SurfaceWater(uint tpage, int u0, int v0, int u1, int v1)
+    /// blend and on one of the water's rects through a cool palette, as SurfaceMaterial.Classify
+    /// takes a packet.</summary>
+    static bool SurfaceWater(uint tpage, uint clut, int u0, int v0, int u1, int v1)
     {
         uint blend = (tpage >> 5) & 3u;
         if (blend is not (0u or 3u)) return false;
@@ -1102,7 +1104,7 @@ public static class RetainedMap
         {
             ref var r = ref SurfaceMaterial.Rects[i];
             if (x0 >= r.X + r.W || x1 <= r.X || y0 >= r.Y + r.H || y1 <= r.Y) continue;
-            if (r.Material == SurfaceMaterial.Water) return true;
+            if (r.Material == SurfaceMaterial.Water) return !r.CoolOnly || SurfaceMaterial.CoolPalette((int)clut, mode);
         }
         return false;
     }

@@ -22,7 +22,7 @@ static class RetainedPlanes
         public int Corners;
         public bool Semi;
         public byte Mat;
-        public uint TPage, Rect;
+        public uint TPage, Rect, Clut;
         public int Key;
     }
 
@@ -55,7 +55,7 @@ static class RetainedPlanes
     public static void Clear() { _faces.Clear(); _groups.Clear(); _groupOf.Clear(); }
 
     public static void Note(Span<float> px, Span<float> py, Span<float> pz, int corners, bool semi, byte mat,
-                            uint tpage, uint rect)
+                            uint tpage, uint rect, uint clut)
     {
         if (!semi && mat == 0) return;
         float lo = py[0], hi = py[0];
@@ -66,7 +66,7 @@ static class RetainedPlanes
         {
             X0 = px[0], Z0 = pz[0], X1 = px[1], Z1 = pz[1], X2 = px[2], Z2 = pz[2],
             X3 = corners == 4 ? px[3] : px[2], Z3 = corners == 4 ? pz[3] : pz[2],
-            Y = y, Corners = corners, Semi = semi, Mat = mat, TPage = tpage, Rect = rect,
+            Y = y, Corners = corners, Semi = semi, Mat = mat, TPage = tpage, Rect = rect, Clut = clut,
             Key = (int)MathF.Round(y / 16f),
         });
     }
@@ -99,7 +99,8 @@ static class RetainedPlanes
     }
 
     /// <summary>Whether a translucent face samples one of the fluid slots' rects,
-    /// which is how the reflection pass knows water from any other blended face.</summary>
+    /// which is how the reflection pass knows water from any other blended face, through a
+    /// cool palette (the lava is the same rect through an orange one).</summary>
     static bool Water(in Face f)
     {
         if (!f.Semi) return false;
@@ -110,7 +111,8 @@ static class RetainedPlanes
         for (int i = 0; i < SurfaceMaterial.RectN; i++)
         {
             ref var r = ref SurfaceMaterial.Rects[i];
-            if (x1 >= r.X && x0 < r.X + r.W && y1 >= r.Y && y0 < r.Y + r.H) return true;
+            if (x1 >= r.X && x0 < r.X + r.W && y1 >= r.Y && y0 < r.Y + r.H)
+                return !r.CoolOnly || SurfaceMaterial.CoolPalette((int)f.Clut, (int)(f.TPage >> 7) & 3);
         }
         return false;
     }
