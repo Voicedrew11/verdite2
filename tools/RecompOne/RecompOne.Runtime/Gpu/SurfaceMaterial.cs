@@ -131,6 +131,34 @@ public static class SurfaceMaterial
         /// it: the same slots also hold the main-hall fire (additive) and the
         /// creatures' skins.</summary>
         public bool TranslucentOnly;
+        /// <summary>Only a texel looked up through a cool palette takes it
+        /// (<see cref="CoolPalette"/>): the game draws its water and its lava from one
+        /// scrolling rect, through a blue palette and an orange one.</summary>
+        public bool CoolOnly;
+    }
+
+    /// <summary>Whether a palette is cool: summed over its entries (sixteen, evenly
+    /// spaced in an 8-bit one; 0, transparent, left out), blue at least red. The
+    /// water's palettes measure blue over red (0.29 0.36 0.48), the lava's red far
+    /// over blue (0.82 0.31 0.10). A direct-colour texture, a palette not in VRAM or
+    /// no GPU yet reads as cool, which is what a rect took before. The prim shader's
+    /// <c>coolPalette</c> is the same test.</summary>
+    public static bool CoolPalette(int clut, int texMode)
+    {
+        if (texMode > 1) return true;
+        var vram = Runtime.Gpu?.Vram;
+        if (vram == null) return true;
+        int cx = (clut & 0x3F) * 16, cy = (clut >> 6) & 0x1FF;
+        int step = texMode == 0 ? 1 : 16;
+        int red = 0, blue = 0;
+        for (int i = 0; i < 16; i++)
+        {
+            ushort t = vram[cy * Gpu.VramWidth + ((cx + i * step) & (Gpu.VramWidth - 1))];
+            if (t == 0) continue;
+            red += t & 0x1F;
+            blue += (t >> 10) & 0x1F;
+        }
+        return blue >= red;
     }
 
     public const int RectSlots = 16;
@@ -157,10 +185,12 @@ public static class SurfaceMaterial
     public static readonly long[] RefusedByBlend = new long[4];
     /// <summary>Triangles on a rect whose packet the port said was not its material.</summary>
     public static long RefusedByPort;
+    /// <summary>Triangles on a cool-only rect through a warm palette (the lava).</summary>
+    public static long RefusedByPalette;
 
     public static void ResetCounters()
     {
-        FromPacket = FromRect = Blended = Overlays = Veils = TexturedVeils = RefusedByPort = PreHudCopies = 0;
+        FromPacket = FromRect = Blended = Overlays = Veils = TexturedVeils = RefusedByPort = RefusedByPalette = PreHudCopies = 0;
         Array.Clear(ByMaterial);
         Array.Clear(RefusedByBlend);
     }
@@ -169,11 +199,11 @@ public static class SurfaceMaterial
     /// rectangle's, then <see cref="Opaque"/> for an opaque one and
     /// <see cref="None"/> for a blended one. <paramref name="notRect"/> is the packet's
     /// <see cref="GtePacketDepth.Rec.NotRect"/>: no rectangle names it.</summary>
-    public static byte Classify(byte packet, bool textured, bool semi, int blend, int tpage,
+    public static byte Classify(byte packet, bool textured, bool semi, int blend, int tpage, int clut,
                                 int u0, int v0, int u1, int v1) =>
-        Classify(packet, false, textured, semi, blend, tpage, u0, v0, u1, v1);
+        Classify(packet, false, textured, semi, blend, tpage, clut, u0, v0, u1, v1);
 
-    public static byte Classify(byte packet, bool notRect, bool textured, bool semi, int blend, int tpage,
+    public static byte Classify(byte packet, bool notRect, bool textured, bool semi, int blend, int tpage, int clut,
                                 int u0, int v0, int u1, int v1)
     {
         if (packet != None) { FromPacket++; ByMaterial[packet]++; return packet; }
@@ -197,6 +227,7 @@ public static class SurfaceMaterial
                     if (semi) RefusedByBlend[blend & 3]++;
                     continue;
                 }
+                if (r.CoolOnly && !CoolPalette(clut, mode)) { RefusedByPalette++; continue; }
                 FromRect++;
                 ByMaterial[r.Material]++;
                 return r.Material;
