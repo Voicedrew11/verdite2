@@ -1,0 +1,296 @@
+diff --git a/RecompOne.Runtime/Config/ViewConfig.cs b/RecompOne.Runtime/Config/ViewConfig.cs
+index 12bd752..50ae4c9 100644
+--- a/RecompOne.Runtime/Config/ViewConfig.cs
++++ b/RecompOne.Runtime/Config/ViewConfig.cs
+@@ -127,6 +127,13 @@ public class ViewConfig
+         set => SetFloat("RenderScale", value < 1 ? 1 : value > 8 ? 8 : value);
+     }
+ 
++    /// <summary>0116. <see cref="Hle.GlVram.Downsample"/>.</summary>
++    public bool Downsample
++    {
++        get => GetBool("Downsample");
++        set => SetBool("Downsample", value);
++    }
++
+     public bool VSync
+     {
+         get => GetBool("VSync");
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+index d995985..c1c0209 100644
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+@@ -110,6 +110,12 @@ public sealed partial class GlCore : IGpuBackend
+     int _lightNSent = -1, _lightsSentGen = -1, _kRemasterGen;
+ 
+     uint _postProg, _postFbo, _postTex;
++    // 0116. The downsample's two programs and its two targets: the game's own
++    // pixels, and the size the Output panel draws the picture at.
++    uint _dsBoxProg, _dsUpProg, _dsBoxTex, _dsBoxFbo, _dsUpTex, _dsUpFbo;
++    int _uDsFactor = -1, _uDsSrcSize = -1, _uDsOutSize = -1;
++    int _dsBoxW, _dsBoxH, _dsUpW, _dsUpH;
++    bool _dsFailed;
+     int _postW, _postH, _postVersion = -1;
+     int _uPostTexSize, _uPostOutputSize, _uPostTime, _uPostFrame;
+     int _postFrame, _postParamVersion = -1;
+@@ -2794,15 +2800,104 @@ public sealed partial class GlCore : IGpuBackend
+         }
+ 
+         uint outTex = ApplyPostFx(_presentTex, fbW, fbH);
++        uint outFbo = outTex == _postTex ? _postFbo : _presentFbo;
++        int outTexW = fbW, outTexH = fbH;
++        if (GlVram.Downsample && presentScale > 1 && !rgb24 && outW > 0 && outH > 0
++            && Downsample(outTex, presentScale, w1x, h1x, outW, outH))
++            (outTex, outFbo, outTexW, outTexH) = (_dsUpTex, _dsUpFbo, outW, outH);
+         EndGpuTimer(compQuery, GpuWork.Composite, compStart, Diagnostics.GpuTimes.Pass.Composite);
+         ResolveGpuTimes();
+         Diagnostics.GpuTimes.Issued = ++_gpuPresent;
+         Diagnostics.Profiler.End(compProfile);
+-        if (PresentSnap.Due(dispY)) SnapPresent(outTex == _postTex ? _postFbo : _presentFbo, fbW, fbH, dispX, dispY);
++        if (PresentSnap.Due(dispY)) SnapPresent(outFbo, outTexW, outTexH, dispX, dispY);
+ 
+         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+         GpuTrace.Sink?.Work(GpuWork.Present, presentStart, System.Diagnostics.Stopwatch.GetTimestamp(), 0);
+-        return (outTex, fbW, fbH, aspect);
++        return (outTex, outTexW, outTexH, aspect);
++    }
++
++    /// <summary>0116. The scaled picture boxed down to the game's own pixels and
++    /// brought back up to the size it is drawn at. Without it the Output panel
++    /// shrinks a 1920-line target to the window bilinearly with no mipmaps, which
++    /// reads four texels out of every sixty-four and shimmers on every edge as the
++    /// camera moves. False leaves the picture as it was: the GL 2.1 context has
++    /// no texelFetch, and a program that fails to build is not retried.</summary>
++    unsafe bool Downsample(uint srcTex, int factor, int w1x, int h1x, int outW, int outH)
++    {
++        if (_legacy || _dsFailed) return false;
++        if (_dsBoxProg == 0)
++        {
++            _dsBoxProg = GlShaders.Build(_gl, GlShaders.FullscreenVs, GlShaders.DownsampleBoxFs, "downsample-box", out string? boxError);
++            _dsUpProg = GlShaders.Build(_gl, GlShaders.FullscreenVs, GlShaders.DownsampleUpFs, "downsample-up", out string? upError);
++            if (_dsBoxProg == 0 || _dsUpProg == 0)
++            {
++                Console.WriteLine($"[gpu-ds] {boxError ?? upError}");
++                _dsFailed = true;
++                return false;
++            }
++            _gl.UseProgram(_dsBoxProg);
++            _gl.Uniform1(_gl.GetUniformLocation(_dsBoxProg, "uSrc"), 0);
++            _uDsFactor = _gl.GetUniformLocation(_dsBoxProg, "uFactor");
++            _gl.UseProgram(_dsUpProg);
++            _gl.Uniform1(_gl.GetUniformLocation(_dsUpProg, "uSrc"), 0);
++            _uDsSrcSize = _gl.GetUniformLocation(_dsUpProg, "uSrcSize");
++            _uDsOutSize = _gl.GetUniformLocation(_dsUpProg, "uOutSize");
++            (_dsBoxTex, _dsBoxFbo) = DownsampleTarget();
++            (_dsUpTex, _dsUpFbo) = DownsampleTarget();
++        }
++        if (w1x != _dsBoxW || h1x != _dsBoxH)
++        {
++            DownsampleResize(_dsBoxTex, _dsBoxFbo, w1x, h1x);
++            (_dsBoxW, _dsBoxH) = (w1x, h1x);
++        }
++        if (outW != _dsUpW || outH != _dsUpH)
++        {
++            DownsampleResize(_dsUpTex, _dsUpFbo, outW, outH);
++            (_dsUpW, _dsUpH) = (outW, outH);
++        }
++
++        _gl.Disable(EnableCap.DepthTest);
++        _gl.Disable(EnableCap.Blend);
++        _gl.Disable(EnableCap.ScissorTest);
++        _gl.BindVertexArray(_presentVao);
++        _gl.ActiveTexture(TextureUnit.Texture0);
++
++        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _dsBoxFbo);
++        _gl.Viewport(0, 0, (uint)w1x, (uint)h1x);
++        _gl.UseProgram(_dsBoxProg);
++        _gl.BindTexture(TextureTarget.Texture2D, srcTex);
++        _gl.Uniform1(_uDsFactor, factor);
++        _gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
++
++        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _dsUpFbo);
++        _gl.Viewport(0, 0, (uint)outW, (uint)outH);
++        _gl.UseProgram(_dsUpProg);
++        _gl.BindTexture(TextureTarget.Texture2D, _dsBoxTex);
++        _gl.Uniform2(_uDsSrcSize, (float)w1x, h1x);
++        _gl.Uniform2(_uDsOutSize, (float)outW, outH);
++        _gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
++        return true;
++    }
++
++    (uint tex, uint fbo) DownsampleTarget()
++    {
++        uint tex = _gl.GenTexture();
++        _gl.BindTexture(TextureTarget.Texture2D, tex);
++        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Linear);
++        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
++        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
++        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
++        return (tex, _gl.GenFramebuffer());
++    }
++
++    unsafe void DownsampleResize(uint tex, uint fbo, int w, int h)
++    {
++        _gl.BindTexture(TextureTarget.Texture2D, tex);
++        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)w, (uint)h, 0,
++            PixelFormat.Rgba, PixelType.UnsignedByte, null);
++        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, fbo);
++        _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
++            TextureTarget.Texture2D, tex, 0);
+     }
+     
+     /// <summary>0069. The composited picture, read back for <see cref="PresentSnap"/>.
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index 2b1233e..220d718 100644
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -14,6 +14,50 @@ internal static class GlShaders
+         }
+         """;
+ 
++    // 0116. The scaled picture averaged back to the game's own pixels: one
++    // output texel is the plain mean of the uFactor x uFactor block under it.
++    // The loop bounds are constants because GLSL 3.30 drivers unroll on them;
++    // the render scale is at most 8.
++    public const string DownsampleBoxFs = """
++        #version 330 core
++        uniform sampler2D uSrc;
++        uniform int uFactor;
++        out vec4 oColor;
++        void main() {
++            ivec2 base = ivec2(gl_FragCoord.xy) * uFactor;
++            vec3 sum = vec3(0.0);
++            for (int y = 0; y < 8; y++) {
++                if (y >= uFactor) break;
++                for (int x = 0; x < 8; x++) {
++                    if (x >= uFactor) break;
++                    sum += texelFetch(uSrc, base + ivec2(x, y), 0).rgb;
++                }
++            }
++            oColor = vec4(sum / float(uFactor * uFactor), 1.0);
++        }
++        """;
++
++    // 0116. The averaged picture brought up to the window with sharp bilinear:
++    // each game pixel is a flat square at the largest whole multiple that fits,
++    // and only the band left over between two of them is blended, so the rows
++    // come out even at a scale like 4.5 without smearing the whole picture.
++    public const string DownsampleUpFs = """
++        #version 330 core
++        in vec2 vUv;
++        uniform sampler2D uSrc;
++        uniform vec2 uSrcSize;
++        uniform vec2 uOutSize;
++        out vec4 oColor;
++        void main() {
++            vec2 texel = vUv * uSrcSize;
++            vec2 scale = max(floor(uOutSize / uSrcSize), vec2(1.0));
++            vec2 c = fract(texel) - 0.5;
++            vec2 r = 0.5 - 0.5 / scale;
++            vec2 f = (c - clamp(c, -r, r)) * scale + 0.5;
++            oColor = vec4(texture(uSrc, (floor(texel) + f) / uSrcSize).rgb, 1.0);
++        }
++        """;
++
+     public const string PresentFs = """
+         #version 330 core
+         in vec2 vUv;
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlVram.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlVram.cs
+index b3834a8..b920e8c 100644
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlVram.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlVram.cs
+@@ -15,6 +15,11 @@ public static class GlVram
+     /// texture size limit; a request above it is taken at this.</summary>
+     public static int MaxScale { get; set; } = 8;
+ 
++    /// <summary>0116. Average the scaled picture back down to the game's own pixels
++    /// before it is drawn, and bring it up to the window with sharp bilinear. Has no
++    /// effect at a scale of 1, where there is nothing to average.</summary>
++    public static bool Downsample { get; set; }
++
+     /// <summary>Keep a scaled copy of every framebuffer readback, so an upload of
+     /// the same pixels back into VRAM is served by that copy instead of by the 1x
+     /// data the game read. See GlCore's snapshot block. On by default;
+diff --git a/RecompOne.Runtime/Host/Window/Assets/languages.json b/RecompOne.Runtime/Host/Window/Assets/languages.json
+index 0142296..989a966 100644
+--- a/RecompOne.Runtime/Host/Window/Assets/languages.json
++++ b/RecompOne.Runtime/Host/Window/Assets/languages.json
+@@ -686,6 +686,22 @@
+       "zh-CN": "当前状态下为 {1} 行数, 缩放后为 {3} 行数 ({4}x)",
+       "fr-FR": "{1} lignes à l'origine, {3} après mise à l'échelle ({4}x)"
+     },
++    "settings.display.downsample": {
++      "en": "Downsample to original resolution",
++      "pt-BR": "Reduzir para a resolução original",
++      "es-419": "Reducir a la resolución original",
++      "ja-JP": "元の解像度にダウンサンプル",
++      "zh-CN": "降采样至原始分辨率",
++      "fr-FR": "Réduire à la résolution d'origine"
++    },
++    "settings.display.downsample_hint": {
++      "en": "Averages the scaled picture back to the original pixels, then scales them up evenly. Smooth edges with the PSX's pixel grid.",
++      "pt-BR": "Calcula a média da imagem escalada de volta aos pixels originais e depois os amplia de forma uniforme. Bordas suaves com a grade de pixels do PSX.",
++      "es-419": "Promedia la imagen escalada de vuelta a los píxeles originales y luego los amplía de forma uniforme. Bordes suaves con la cuadrícula de píxeles de PSX.",
++      "ja-JP": "スケールした画像を元のピクセルに平均化し、均等に拡大します。PSXのピクセルグリッドのまま輪郭が滑らかになります。",
++      "zh-CN": "将缩放后的画面平均回原始像素，再均匀放大。保留PSX像素网格的同时使边缘平滑。",
++      "fr-FR": "Ramène l'image mise à l'échelle aux pixels d'origine par moyenne, puis les agrandit uniformément. Des bords lisses sur la grille de pixels de la PSX."
++    },
+     "settings.display.backend": {
+       "en": "Graphics backend",
+       "pt-BR": "Backend gráfico",
+diff --git a/RecompOne.Runtime/Host/Window/HostWindow.cs b/RecompOne.Runtime/Host/Window/HostWindow.cs
+index a49372d..e7072b4 100644
+--- a/RecompOne.Runtime/Host/Window/HostWindow.cs
++++ b/RecompOne.Runtime/Host/Window/HostWindow.cs
+@@ -872,6 +872,7 @@ public static class HostWindow
+         _ramTex = CreateTexture(_gl);
+ 
+         Hle.GlVram.Scale = ConfigManager.View.RenderScale;
++        Hle.GlVram.Downsample = ConfigManager.View.Downsample;
+         _glBackend = (Hle.GlCore)Hle.GpuBackendFactory.Create(_gl,
+             Hle.GpuBackendFactory.Parse(ConfigManager.View.GpuBackend));
+         _glBackend.InitGl();
+@@ -1168,12 +1169,21 @@ public static class HostWindow
+             if (Hle.GpuHle.Active && _glBackend is { Ready: true } && gpu.DisplayEnabled)
+             {
+                 var wf = _window!.FramebufferSize;
++                // 0116. The size the Output panel drew the picture at last frame, in
++                // framebuffer pixels, so the downsample brings it up to exactly that
++                // and ImGui then draws it one to one. The window before the first frame.
++                var (outW, outH) = (wf.X, wf.Y);
++                if (OutputView.Valid)
++                {
++                    var px = OutputView.Size * ImGui.GetIO().DisplayFramebufferScale;
++                    (outW, outH) = ((int)MathF.Round(px.X), (int)MathF.Round(px.Y));
++                }
+                 var display = Profiler.Begin(Profiler.Display);
+                 var (tex, tw, th, aspect) = _glBackend.PresentDisplay(
+                     gpu.DisplayX, gpu.DisplayY,
+                     gpu.DisplayWidth, gpu.DisplayHeight,
+                     gpu.Display24Bit,
+-                    wf.X, wf.Y);
++                    outW, outH);
+                 Profiler.End(display);
+                 if (tex != 0) OutputPanel.SetTexture(tex, tw, th, aspect);
+                 gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+diff --git a/RecompOne.Runtime/Host/Window/Settings/Sections/DisplaySettingsSection.cs b/RecompOne.Runtime/Host/Window/Settings/Sections/DisplaySettingsSection.cs
+index 8bf610f..23285d6 100644
+--- a/RecompOne.Runtime/Host/Window/Settings/Sections/DisplaySettingsSection.cs
++++ b/RecompOne.Runtime/Host/Window/Settings/Sections/DisplaySettingsSection.cs
+@@ -59,6 +59,16 @@ internal sealed class DisplaySettingsSection : ISettingsSection
+             ImGui.TextDisabled(Localization.T("settings.display.render_scale_lines",
+                 width, lines, width * scale, lines * scale, scale));
+ 
++        var downsample = Hle.GlVram.Downsample;
++        if (ImGui.Checkbox(Localization.T("settings.display.downsample"), ref downsample))
++        {
++            ConfigManager.View.Downsample = downsample;
++            ConfigManager.SaveView(PanelManager.Panels);
++            Hle.GlVram.Downsample = downsample;
++        }
++
++        if (ImGui.IsItemHovered()) ImGui.SetTooltip(Localization.T("settings.display.downsample_hint"));
++
+         // How big the picture is drawn, and how wide it is presented, are the same
+         // kind of choice, so a port offering an aspect ratio has somewhere to put it
+         // that is not a group appended below the whole section.

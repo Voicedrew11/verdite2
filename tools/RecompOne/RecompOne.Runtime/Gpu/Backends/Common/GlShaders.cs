@@ -14,6 +14,50 @@ internal static class GlShaders
         }
         """;
 
+    // 0129. The scaled picture averaged back to the game's own pixels: one
+    // output texel is the plain mean of the uFactor x uFactor block under it.
+    // The loop bounds are constants because GLSL 3.30 drivers unroll on them;
+    // the render scale is at most 8.
+    public const string DownsampleBoxFs = """
+        #version 330 core
+        uniform sampler2D uSrc;
+        uniform int uFactor;
+        out vec4 oColor;
+        void main() {
+            ivec2 base = ivec2(gl_FragCoord.xy) * uFactor;
+            vec3 sum = vec3(0.0);
+            for (int y = 0; y < 8; y++) {
+                if (y >= uFactor) break;
+                for (int x = 0; x < 8; x++) {
+                    if (x >= uFactor) break;
+                    sum += texelFetch(uSrc, base + ivec2(x, y), 0).rgb;
+                }
+            }
+            oColor = vec4(sum / float(uFactor * uFactor), 1.0);
+        }
+        """;
+
+    // 0129. The averaged picture brought up to the window with sharp bilinear:
+    // each game pixel is a flat square at the largest whole multiple that fits,
+    // and only the band left over between two of them is blended, so the rows
+    // come out even at a scale like 4.5 without smearing the whole picture.
+    public const string DownsampleUpFs = """
+        #version 330 core
+        in vec2 vUv;
+        uniform sampler2D uSrc;
+        uniform vec2 uSrcSize;
+        uniform vec2 uOutSize;
+        out vec4 oColor;
+        void main() {
+            vec2 texel = vUv * uSrcSize;
+            vec2 scale = max(floor(uOutSize / uSrcSize), vec2(1.0));
+            vec2 c = fract(texel) - 0.5;
+            vec2 r = 0.5 - 0.5 / scale;
+            vec2 f = (c - clamp(c, -r, r)) * scale + 0.5;
+            oColor = vec4(texture(uSrc, (floor(texel) + f) / uSrcSize).rgb, 1.0);
+        }
+        """;
+
     public const string PresentFs = """
         #version 330 core
         in vec2 vUv;
