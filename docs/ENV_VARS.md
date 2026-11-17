@@ -149,6 +149,7 @@ KF2_VIEWCLIP=0 KF2_VIEWCLIP_PROBE=1      # the game's view-space clip volume, an
 KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
 KF2_TRUECOLOR=0                        # 15-bit shaded output (24-bit is the default; GL backend only)
 KF2_VRAMSNAP=0                         # a menu restores the frozen frame at 1x again (the scaled copy is kept by default)
+KF2_DOWNSAMPLE=1                       # the scaled picture averaged back to 240 lines, then sharp bilinear to the window (0129); 0 the picture as it is; unset, PORT SETTINGS ▸ DISPLAY ▸ DOWNSAMPLE (the runtime's `Downsample` key); the row is locked while it is set
 KF2_VRAMSNAP_PROBE=1                   # frame restores served from that copy, against uploads that missed, and readbacks outside a display target not copied
 KF2_GLDEBUG=1                          # a debug GL context, and every error or warning the driver reports on stderr (0065); =2 adds notifications and each first report's stack
 KF2_VRAMCHECK=1                        # mirror every VRAM upload, copy and fill on the CPU and name the operation that changes texels it should not (slow)
