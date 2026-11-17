@@ -2358,6 +2358,22 @@ Four files in the directory have no entry below:
   fullscreen: a snap of 3840x2160 that is 9x9 squares of a 428x240 picture, against
   the 3424x1920 target without it. **How it looks in motion is not judged here.**
   **No recompile.**
+- `0130-lava-not-water.patch` — lava is not water. The game draws its water and its
+  lava from one scrolling dest rect, at the same UVs and in the same averaging
+  blend, through two palettes: the water's measures 0.29 0.36 0.48 (mean texel RGB),
+  the lava's 0.82 0.31 0.10. A rect was the whole test, so the lava took the
+  ripples, the swell, the murk and the reflections. `TexRect.CoolOnly` makes a rect
+  a material only through a palette whose entries sum to at least as much blue as
+  red (`SurfaceMaterial.CoolPalette`: sixteen entries, spaced in an 8-bit palette,
+  0 left out; a direct-colour texture or no VRAM reads as cool, the old answer);
+  `Classify` takes the CLUT for it and counts what it refuses
+  (`RefusedByPalette`); `PrimFs`'s `waveRectOf` makes the same test
+  (`coolPalette`, a pack's replacement palette read as cool), so the ripples stop
+  on the lava. The port's own water tests (the swell's mesh, the GPU world's
+  `FlagWater`, the planes, the model water) call `CoolPalette` too. Measured in KF2,
+  headless: the swell's water positions in fdat14 and fdat20 go from 652 and 508 to 0,
+  fdat02's 5174 and fdat05's 133 unchanged; `PrimFs` compiles under
+  `glslangValidator`. **The lava's picture is not judged here.** **No recompile.**
 
 ## Package bumps
 

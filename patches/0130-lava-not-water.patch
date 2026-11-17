@@ -1,0 +1,124 @@
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+index adee2bd..9fb73c0 100644
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+@@ -1073,7 +1073,7 @@ public sealed partial class GlCore : IGpuBackend
+                 m = zMode == 2 ? SurfaceMaterial.None : SurfaceMaterial.Opaque;
+                 if (GteDepth.Reflections)
+                     m = SurfaceMaterial.Classify(a.Material, a.NotRect, f.Textured && !f.UseImage, f.SemiTrans && zMode == 2,
+-                        f.BlendMode, f.TPage,
++                        f.BlendMode, f.TPage, f.Clut,
+                         (int)Math.Min(a.U, Math.Min(b.U, c.U)), (int)Math.Min(a.V, Math.Min(b.V, c.V)),
+                         (int)Math.Max(a.U, Math.Max(b.U, c.U)), (int)Math.Max(a.V, Math.Max(b.V, c.V)));
+             }
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index d5b8f52..f26335d 100644
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -2360,6 +2360,22 @@ internal static class GlShaders
+         // itself wraps.
+         ivec4 gWave = ivec4(0);
+ 
++        // SurfaceMaterial.CoolPalette: blue at least red over the palette's entries
++        // (sixteen, spaced in an 8-bit one; 0 left out). The lava shares the water's
++        // rect through an orange palette. A pack's replacement palette reads as cool.
++        bool coolPalette() {
++            if (texMode > 1 || vRepClut != 0) return true;
++            int step = texMode == 0 ? 1 : 16;
++            int red = 0, blue = 0;
++            for (int i = 0; i < 16; ++i) {
++                int t = fetch16(ivec2(clutBase.x + i * step, clutBase.y));
++                if (t == 0) continue;
++                red += t & 0x1f;
++                blue += (t >> 10) & 0x1f;
++            }
++            return blue >= red;
++        }
++
+         void waveRectOf(vec2 uv) {
+             float div = texMode == 0 ? 4.0 : texMode == 1 ? 2.0 : 1.0;
+             float vx = float(pageBase.x) + floor(uv.x) / div;
+@@ -2368,6 +2384,7 @@ internal static class GlShaders
+                 if (i >= uWaveN) break;
+                 vec4 r = uWaveRect[i];
+                 if (vx < r.x || vx >= r.x + r.z || vy < r.y || vy >= r.y + r.w) continue;
++                if (!coolPalette()) return;
+                 gWave = ivec4(int((r.x - float(pageBase.x)) * div + 0.5), int(r.y - float(pageBase.y) + 0.5),
+                               int(r.z * div + 0.5), int(r.w + 0.5));
+                 return;
+diff --git a/RecompOne.Runtime/Gpu/SurfaceMaterial.cs b/RecompOne.Runtime/Gpu/SurfaceMaterial.cs
+index 16625e9..a0fc628 100644
+--- a/RecompOne.Runtime/Gpu/SurfaceMaterial.cs
++++ b/RecompOne.Runtime/Gpu/SurfaceMaterial.cs
+@@ -131,6 +131,34 @@ public static class SurfaceMaterial
+         /// it: the same slots also hold the main-hall fire (additive) and the
+         /// creatures' skins.</summary>
+         public bool TranslucentOnly;
++        /// <summary>Only a texel looked up through a cool palette takes it
++        /// (<see cref="CoolPalette"/>): the game draws its water and its lava from one
++        /// scrolling rect, through a blue palette and an orange one.</summary>
++        public bool CoolOnly;
++    }
++
++    /// <summary>Whether a palette is cool: summed over its entries (sixteen, evenly
++    /// spaced in an 8-bit one; 0, transparent, left out), blue at least red. The
++    /// water's palettes measure blue over red (0.29 0.36 0.48), the lava's red far
++    /// over blue (0.82 0.31 0.10). A direct-colour texture, a palette not in VRAM or
++    /// no GPU yet reads as cool, which is what a rect took before. The prim shader's
++    /// <c>coolPalette</c> is the same test.</summary>
++    public static bool CoolPalette(int clut, int texMode)
++    {
++        if (texMode > 1) return true;
++        var vram = Runtime.Gpu?.Vram;
++        if (vram == null) return true;
++        int cx = (clut & 0x3F) * 16, cy = (clut >> 6) & 0x1FF;
++        int step = texMode == 0 ? 1 : 16;
++        int red = 0, blue = 0;
++        for (int i = 0; i < 16; i++)
++        {
++            ushort t = vram[cy * Gpu.VramWidth + ((cx + i * step) & (Gpu.VramWidth - 1))];
++            if (t == 0) continue;
++            red += t & 0x1F;
++            blue += (t >> 10) & 0x1F;
++        }
++        return blue >= red;
+     }
+ 
+     public const int RectSlots = 16;
+@@ -157,10 +185,12 @@ public static class SurfaceMaterial
+     public static readonly long[] RefusedByBlend = new long[4];
+     /// <summary>Triangles on a rect whose packet the port said was not its material.</summary>
+     public static long RefusedByPort;
++    /// <summary>Triangles on a cool-only rect through a warm palette (the lava).</summary>
++    public static long RefusedByPalette;
+ 
+     public static void ResetCounters()
+     {
+-        FromPacket = FromRect = Blended = Overlays = Veils = TexturedVeils = RefusedByPort = PreHudCopies = 0;
++        FromPacket = FromRect = Blended = Overlays = Veils = TexturedVeils = RefusedByPort = RefusedByPalette = PreHudCopies = 0;
+         Array.Clear(ByMaterial);
+         Array.Clear(RefusedByBlend);
+     }
+@@ -169,11 +199,11 @@ public static class SurfaceMaterial
+     /// rectangle's, then <see cref="Opaque"/> for an opaque one and
+     /// <see cref="None"/> for a blended one. <paramref name="notRect"/> is the packet's
+     /// <see cref="GtePacketDepth.Rec.NotRect"/>: no rectangle names it.</summary>
+-    public static byte Classify(byte packet, bool textured, bool semi, int blend, int tpage,
++    public static byte Classify(byte packet, bool textured, bool semi, int blend, int tpage, int clut,
+                                 int u0, int v0, int u1, int v1) =>
+-        Classify(packet, false, textured, semi, blend, tpage, u0, v0, u1, v1);
++        Classify(packet, false, textured, semi, blend, tpage, clut, u0, v0, u1, v1);
+ 
+-    public static byte Classify(byte packet, bool notRect, bool textured, bool semi, int blend, int tpage,
++    public static byte Classify(byte packet, bool notRect, bool textured, bool semi, int blend, int tpage, int clut,
+                                 int u0, int v0, int u1, int v1)
+     {
+         if (packet != None) { FromPacket++; ByMaterial[packet]++; return packet; }
+@@ -197,6 +227,7 @@ public static class SurfaceMaterial
+                     if (semi) RefusedByBlend[blend & 3]++;
+                     continue;
+                 }
++                if (r.CoolOnly && !CoolPalette(clut, mode)) { RefusedByPalette++; continue; }
+                 FromRect++;
+                 ByMaterial[r.Material]++;
+                 return r.Material;

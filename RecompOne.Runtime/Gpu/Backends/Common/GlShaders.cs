@@ -2360,6 +2360,22 @@ internal static class GlShaders
         // itself wraps.
         ivec4 gWave = ivec4(0);
 
+        // SurfaceMaterial.CoolPalette: blue at least red over the palette's entries
+        // (sixteen, spaced in an 8-bit one; 0 left out). The lava shares the water's
+        // rect through an orange palette. A pack's replacement palette reads as cool.
+        bool coolPalette() {
+            if (texMode > 1 || vRepClut != 0) return true;
+            int step = texMode == 0 ? 1 : 16;
+            int red = 0, blue = 0;
+            for (int i = 0; i < 16; ++i) {
+                int t = fetch16(ivec2(clutBase.x + i * step, clutBase.y));
+                if (t == 0) continue;
+                red += t & 0x1f;
+                blue += (t >> 10) & 0x1f;
+            }
+            return blue >= red;
+        }
+
         void waveRectOf(vec2 uv) {
             float div = texMode == 0 ? 4.0 : texMode == 1 ? 2.0 : 1.0;
             float vx = float(pageBase.x) + floor(uv.x) / div;
@@ -2368,6 +2384,7 @@ internal static class GlShaders
                 if (i >= uWaveN) break;
                 vec4 r = uWaveRect[i];
                 if (vx < r.x || vx >= r.x + r.z || vy < r.y || vy >= r.y + r.w) continue;
+                if (!coolPalette()) return;
                 gWave = ivec4(int((r.x - float(pageBase.x)) * div + 0.5), int(r.y - float(pageBase.y) + 0.5),
                               int(r.z * div + 0.5), int(r.w + 0.5));
                 return;
