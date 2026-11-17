@@ -31,7 +31,9 @@ namespace Kf2;
 /// carries the record's DQA, DQB and curve and the vertex shader fogs it.
 ///
 /// Rebuilt when the map block, the model bank or the remaster's materials change: a
-/// hash once a walk (about 70 KB, a few microseconds). Only the light records a half
+/// hash once a walk (about 70 KB, a few microseconds). The bank's contents are hashed
+/// only when the area loader goes idle (<see cref="AtLoaderIdle"/>), since a walk
+/// across a boundary copies the next area's layout before its meshes. Only the light records a half
 /// names are hashed, since the game rewrites others as it runs. Lit from the records
 /// in the vertex shader (0085, <see cref="RecordsOn"/>), a corner carries its face's
 /// normal and the records it is blended from, so a record the game rewrites is an
@@ -49,6 +51,9 @@ public static class RetainedMap
     const uint LightColour = 0x8006E604;
     const uint VertexCache = 0x8018EB94;
     const uint ViewMatrix = CameraBlock.ViewMatrix;
+    /// <summary>u16, the area loader's state (<c>func_800162DC</c>, <c>func_8001689C</c>):
+    /// nonzero while a request is being streamed in.</summary>
+    const uint LoaderBusy = 0x8017E05C;
 
     static bool? _forced;
     static bool _probe;
@@ -142,6 +147,7 @@ public static class RetainedMap
     public static void AtWalk(CpuContext c, PSMemory mem)
     {
         if (!Ready) return;
+        AtLoaderIdle(mem);
         // What the hash carries of the water, read now rather than later in the frame.
         Reflections.ReadRects(mem);
         Waves.BeforeMap(mem);
@@ -194,6 +200,51 @@ public static class RetainedMap
         if (_probe) Report();
     }
 
+    static bool _loaderBusy, _bankStale;
+    static ulong _bankBuilt;
+
+    /// <summary>A walk across an area boundary streams the next area in over several
+    /// frames, and the layout lands before the mesh bank (area 1 into 0: the map 185 ms
+    /// after the module, the bank 40 ms later, both while the loader is busy). The map
+    /// is built from the layout as it changes, and the bank sits at the same address in
+    /// every area, so its pointer does not change: the build kept the last area's
+    /// meshes on this one's tiles, and a patch only ever rebuilt the cells whose keys
+    /// moved. So once the loader goes idle, a bank whose contents differ from those the
+    /// map was built from is a whole build, and the models' meshes are dropped too.
+    /// See "The last area's meshes on this one's tiles" in docs/GPU_RENDERER.md.</summary>
+    static void AtLoaderIdle(PSMemory mem)
+    {
+        bool busy = mem.ReadU16(LoaderBusy) != 0;
+        bool settled = _loaderBusy && !busy;
+        _loaderBusy = busy;
+        if (!settled) return;
+        RetainedModels.ForgetMeshes();
+        if (!_kept || BankHash(mem) == _bankBuilt) return;
+        _hash = 0;
+        _kept = false;
+        _bankStale = true;
+    }
+
+    /// <summary>The bank's model headers and each model's vertices.</summary>
+    static ulong BankHash(PSMemory mem)
+    {
+        uint table = mem.ReadU32(Banks);
+        if (table == 0) return 0;
+        var ram = mem.Ram;
+        uint mask = (uint)ram.Length - 1u;
+        const int headers = 240 * 28;
+        if ((table + 0xCu & mask) + headers > ram.Length) return 0;
+        ulong h = Mix(0xCBF29CE484222325ul, ram.Slice((int)(table + 0xCu & mask), headers));
+        for (uint model = 0; model < 240; model++)
+        {
+            uint header = table + model * 28u + 0xCu;
+            uint verts = table + mem.ReadU32(header) + 0xCu, count = mem.ReadU32(header + 4u);
+            if (count > 4096u || verts < 0x80000000u || (verts & mask) + count * 8u > ram.Length) continue;
+            h = Mix(h, ram.Slice((int)(verts & mask), (int)(count * 8u)));
+        }
+        return h;
+    }
+
     static void Hash(PSMemory mem)
     {
         var ram = mem.Ram;
@@ -204,7 +255,7 @@ public static class RetainedMap
         Span<uint> extra = [mem.ReadU32(Banks), (uint)Remaster.Surfaces.Serial, (uint)SurfaceMaterial.RectN,
                             (uint)WaterSwell.FreeHash, (uint)(WaterSwell.FreeHash >> 32), mem.ReadU32(LightColour)];
         ulong he = Mix(0xCBF29CE484222325ul, MemoryMarshal.AsBytes(extra));
-        _why = (hm != _hm ? "map " : "") + (hl != _hl ? "lights" + LightDiff(ram.Slice((int)(LightBase & mask), (int)LightBytes)) + " " : "") + (he != _he ? $"bank/materials/rects/swell({extra[0]:X},{extra[1]},{extra[2]},{extra[3]}) " : "");
+        _why = (_bankStale ? "the bank, once the loader settled " : "") + (hm != _hm ? "map " : "") + (hl != _hl ? "lights" + LightDiff(ram.Slice((int)(LightBase & mask), (int)LightBytes)) + " " : "") + (he != _he ? $"bank/materials/rects/swell({extra[0]:X},{extra[1]},{extra[2]},{extra[3]}) " : "");
         _hm = hm; _hl = hl; _he = he;
     }
 
@@ -393,6 +444,8 @@ public static class RetainedMap
         _seamsMs = System.Diagnostics.Stopwatch.GetElapsedTime(seamsAt).TotalMilliseconds;
         Publish();
         KeepKeys(mem);
+        _bankBuilt = BankHash(mem);
+        _bankStale = false;
         _kept = true;
         if (Environment.GetEnvironmentVariable("KF2_GPUWORLD_SEAMS") is { Length: > 0 } tj) SeamCensus(tj);
         if (Environment.GetEnvironmentVariable("KF2_GPUWORLD_DUMPMAP") is { Length: > 0 } dir) DumpMap(dir);

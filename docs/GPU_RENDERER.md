@@ -2043,3 +2043,46 @@ did before.
 
 **Mechanism measured; a real door in play not watched, and the hitch's absence not
 yet confirmed by the player.**
+
+## The last area's meshes on this one's tiles (2026-11-17)
+
+A player reported the map "breaking" on walking back from the second area to the
+first: floating blocks, walls missing, stars where a ceiling should be. It persisted
+past a new game, because it happens on every walk across a boundary, and never on a
+`warp` or a save load, which is why no run here had seen it.
+
+**A walk and a warp load differently.** A warp or a load is `func_80024154`: the
+loading screen, a blocking wait, everything in RAM before the next walk. A walk is a
+crossing object (state `0xE0`, the target area at `rec+0x3A`) calling the resource
+request `0x800162DC`, and the loader `func_8001689C` streams the request in across
+frames while the game runs. Its state: the five resource ids loaded at
+`0x8017E060-64`, the ids pending at `0x8017E06C-70`, a busy u16 at `0x8017E05C`.
+Area 0's crossings sit in pairs in the tunnel, obj 1 at (159744, 104448) to area 1
+and obj 3 at (159744, 94208) back to area 0; area 1's exit to area 0 is obj 48 at
+(26624, 67584).
+
+**The layout lands before the meshes.** Walking area 1 into area 0 (`goto 27648
+-8704 68608` from slot 2), the map block took area 0's layout 185 ms after the
+module, and the mesh bank changed about 40 ms later, both while the loader was
+busy. The bank is at `0x8012E9AC` in every area, so the map's rebuild key, which
+hashes the tile keys and the bank's *pointer*, saw the layout change and not the
+bank: a whole build of area 0's tiles with area 1's meshes, **115,762 triangles
+against the real 48,837**, then a patch of the one cell that changed later, and
+nothing after. The game's own path reads the meshes at draw time, so the kept map
+stayed wrong only in the GPU world (`GpuWorld`, on by default), until the next whole
+build: the next warp or load. The other
+direction was wrong as well (71,218 against 67,501).
+
+**The fix:** `RetainedMap.AtLoaderIdle` watches the busy word, and when the loader
+goes idle compares a hash of the bank (the 240 model headers and each model's
+vertices) with the one the map was built from; a difference is a whole build, and
+the models' meshes are dropped (`RetainedModels.ForgetMeshes`) on the same edge, as
+an overlay load already did. Measured on the same crossings: 1→0 ends at 48,837,
+0→1 at 67,501, each settled 600-650 ms after the module with one extra whole build
+(37-59 ms) per crossing.
+
+**What is left:** the picture is still wrong for the half second the loader is
+streaming (the build at the layout's change is still made). The crossings are in
+tunnels and the game's own picture is mid-load then too. A report of mismatched
+*textures* at a crossing, and the noclip route that showed the same, were not
+reproduced. **Mechanism measured; the reporter's picture not yet confirmed fixed.**
