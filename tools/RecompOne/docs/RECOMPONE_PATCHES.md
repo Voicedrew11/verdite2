@@ -2305,7 +2305,9 @@ Four files in the directory have no entry below:
   the sky or a packet), and `PrimFs` writes the wall's depth over a model fragment
   behind it when three things hold. The ray through the origin meets map behind the
   origin, read at the screen's edge when the origin is past it (a fetch outside the
-  copy is 0, and a lid at the edge of view lost its wall). The origin is within one
+  copy is 0, and a lid at the edge of view lost its wall; the plane's neighbours are
+  clamped the same way, a side clamped onto the pixel skipped, and no plane no pull).
+  The origin is within one
   tile (2048) of this wall pixel: a barrel seen through a doorway is about 3800 off.
   And the origin stands more than 256 in front of the wall's plane, rebuilt from the
   copy two game pixels out: a lid's hinge is 384-512 in front, a corner plant 0-64, a
@@ -2314,8 +2316,10 @@ Four files in the directory have no entry below:
   is the switch. Measured in KF2, by eye: the lid solid at rest from four angles and
   at the edge of view and mid-swing, the barrel in the next room hidden, the plant's
   leaf behind its wall, the floor behind a secret wall no longer drawn on it, monsters
-  pressed against walls whole, and #53's pedestal item and merchant whole.
-  **No recompile.**
+  pressed against walls whole, and #53's pedestal item and merchant whole. Written
+  in Verdite2's copy as `0113` (#93); renumbered past the fork's on the rebase, where
+  its `0114` (perspective-correct faces truncating down) was dropped for `0009`'s
+  amendment, the same rule. **No recompile.**
 - `0128-front-models.patch` — a model the game shows over the world, drawn over it.
   A picked-up item flies from where it lay, and its depth is the barrel's or the
   chest's: depth-tested there, the mask stayed inside its barrel and the shield inside
@@ -2332,7 +2336,8 @@ Four files in the directory have no entry below:
   which had drawn the chest's outline on the shield and darkened its top. Measured in
   KF2, by eye: the mask over its barrel looking down, the shield over its chest
   through the turn with the grip on the side facing the eye, and no outline on it.
-  **No recompile.**
+  Written as `0115` (#93); renumbered on the rebase, and merged with `0116`'s pull:
+  `uDepthPull` is added after the caps, then the depth is scaled. **No recompile.**
 
 ## Package bumps
 

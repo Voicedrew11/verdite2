@@ -2695,21 +2695,31 @@ internal static class GlShaders
                     // Two game pixels: one screen pixel's step is below the depth's
                     // precision. Each axis takes the side that stays on this face.
                     int step = 2 * uScale;
+                    // A fetch outside the copy is undefined, so a neighbour past the
+                    // screen's edge is read at the edge, as the origin's is above.
+                    ivec2 last = textureSize(uWorldDepth, 0) - 1;
                     vec3 dx = vec3(0.0), dy = vec3(0.0);
                     for (int s = -step; s <= step; s += 2 * step) {
-                        vec2 qx = (gl_FragCoord.xy + vec2(s, 0)) / float(uScale) - uClipCentre;
-                        vec2 qy = (gl_FragCoord.xy + vec2(0, s)) / float(uScale) - uClipCentre;
-                        float zx = texelFetch(uWorldDepth, p + ivec2(s, 0), 0).r * 65536.0;
-                        float zy = texelFetch(uWorldDepth, p + ivec2(0, s), 0).r * 65536.0;
+                        ivec2 px = clamp(p + ivec2(s, 0), ivec2(0), last);
+                        ivec2 py = clamp(p + ivec2(0, s), ivec2(0), last);
+                        vec2 qx = (vec2(px) + 0.5) / float(uScale) - uClipCentre;
+                        vec2 qy = (vec2(py) + 0.5) / float(uScale) - uClipCentre;
+                        float zx = texelFetch(uWorldDepth, px, 0).r * 65536.0;
+                        float zy = texelFetch(uWorldDepth, py, 0).r * 65536.0;
                         vec3 ex = (vec3(qx * (zx / uClipH), zx) - wallEye) * sign(float(s));
                         vec3 ey = (vec3(qy * (zy / uClipH), zy) - wallEye) * sign(float(s));
-                        if (s < 0 || abs(ex.z) < abs(dx.z)) dx = ex;
-                        if (s < 0 || abs(ey.z) < abs(dy.z)) dy = ey;
+                        // A side clamped back onto this pixel has no step; the other is taken.
+                        if (px != p && (dx == vec3(0.0) || abs(ex.z) < abs(dx.z))) dx = ex;
+                        if (py != p && (dy == vec3(0.0) || abs(ey.z) < abs(dy.z))) dy = ey;
                     }
-                    vec3 n = normalize(cross(dx, dy));
-                    if (dot(n, -wallEye) < 0.0) n = -n;
-                    if (dot(n, vModelEye - wallEye) > 256.0)
-                        zd = wall;
+                    vec3 c = cross(dx, dy);
+                    // No plane (a one-pixel copy, or both sides clamped): no pull.
+                    if (dot(c, c) > 0.0) {
+                        vec3 n = normalize(c);
+                        if (dot(n, -wallEye) < 0.0) n = -n;
+                        if (dot(n, vModelEye - wallEye) > 256.0)
+                            zd = wall;
+                    }
                 }
             }
             gl_FragDepth = zd;
