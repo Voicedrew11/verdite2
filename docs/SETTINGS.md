@@ -200,7 +200,14 @@ on the first returns to the display. Every group has three tiers:
   the controls and conveniences that keep the game's own pace, and the last save
   reloaded on death.
 * **Modern**: the port's own choices for each feature already judged: the HUD at the edges and the world drawn out to 15 tiles (the
-  View group), and the turning page's twin sticks with acceleration. The remaster
+  View group), and the turning page's twin sticks with acceleration.
+* The port's built-in mods follow the tiers too: the font is Classic in Original
+  and Original++ and Modern in Modern (Lettering); cursor memory is on in
+  Original++ and Modern, NPC dialogue in Modern (Menus and conversations); and
+  Shortcuts is on in Modern only (Hands and hotkeys, under Controls). All three
+  switches ship off by default, so Modern writes them; the font's default is
+  Modern, so Modern writes nothing for it. The spec's `version` was not raised for
+  them, so a player who finished setup is not asked again. The remaster
   packs stay off, as they ship; murky water is off in every tier and by default.
 
 After the tiers comes **the turning page** (`pages` in the spec, `"id": "turning"`),
