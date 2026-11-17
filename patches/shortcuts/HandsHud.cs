@@ -91,6 +91,7 @@ static class HandsHud
         uint d = m.ReadU32(Descriptor);
         if (!HasRoom(m, d)) return;
         CrossFeedback.BeginFrame();
+        CrossFeedback.ForgetOpacities();
 
         uint panel = Stage13.HudRecords + CardFrame.PanelRecord * Stage13.HudStride;
         int left = Widescreen.AnchoredHudX(Widescreen.NativeHudX(m, CardFrame.PanelRecord));

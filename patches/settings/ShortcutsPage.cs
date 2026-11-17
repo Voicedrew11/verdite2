@@ -74,7 +74,7 @@ public sealed class ShortcutsPage : IPatchPage
             CrossFeedback.FadeWhenIdle = fade;
             PatchSettings.Set(Sc.FadeKey, fade);
         }
-        Tip("The hands and hotkey cards dim and turn see-through after a few seconds without a press, " +
+        Tip("The hands and hotkey cards fade to a quarter of their opacity after a few seconds without a press, " +
             "and come back at once on the next one.");
 
         TakeCapturedKey();

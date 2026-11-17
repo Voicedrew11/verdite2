@@ -4182,16 +4182,23 @@ slot numbers clear of them; the name line in the full-size menu font.
 `CrossFeedback` (`patches/shortcuts/CrossFeedback.cs`), 2026-11-16. **Measured headless,
 not judged by eye or ear.**
 
-- **Idle fade.** 4 s after the last press or change the cross dims over 0.5 s to 0.8
-  and then turns see-through. The PS1 has no alpha to step smoothly: a face is opaque
-  or blended in one of four fixed modes, and on a textured face only the texels with
-  the STP bit set blend at all. So the last step is blend mode 0 (half and half) on
-  every face the game draws opaque: the item models' `POLY_GT3` / `POLY_FT3` and the
-  digits' `POLY_FT4`. The card frames are the HP panel's own `POLY_GT4` and already
-  blended (`0x3E`), so they keep their blend mode and are only dimmed. Any press, any
-  change to a card, or the HUD returning after 1 s away (a menu, a load, a message)
-  brings it back solid at once. Gameplay ▸ Shortcuts ▸ *Fade when idle* (on,
-  `kf2.shortcuts.fade`), `KF2_SHORTCUTS_FADE`.
+- **Idle fade.** 4 s after the last press or change the cross fades over 0.8 s
+  (eased) to 25% opacity. Any press, any change to a card, or the HUD returning after
+  1 s away (a menu, a load, a message) brings it back solid at once. Gameplay ▸
+  Shortcuts ▸ *Fade when idle* (on, `kf2.shortcuts.fade`), `KF2_SHORTCUTS_FADE`.
+
+  **The first cut could not fade, and the hardware is why.** The PS1 blends in four
+  fixed modes, and on a textured face only the texels with the STP bit set. The first
+  cut dimmed the colours and then set blend mode 0 on the faces the game draws
+  opaque (the models' `POLY_GT3` / `POLY_FT3`, the digits' `POLY_FT4`). The user's
+  screenshot showed the icons fully solid: their textures have no STP texels, so the
+  bit changed nothing. The frames, the HP panel's own `POLY_GT4`, are already blended
+  (`0x3E`), so they only dimmed. The fade now goes to the renderer beside the packet
+  (RecompOne `0126`, `PacketOpacity`): each polygon of the cross is recorded with its
+  alpha as it is drawn, and the GL backend blends every texel at that alpha. A face
+  the game already blends keeps its blend with the alpha on top, so the frames'
+  see-through interior is unchanged at full opacity and the fade has no step at its
+  start. The software rasterizer ignores the record, so a headless run shows nothing.
 - **A card that changes pulses**: brighter by half and a pixel larger a side, easing
   back over 150 ms. A change is noticed from what the card shows (id, level, count,
   and the current hotkey), so a swap, a step, an item used up and an equip in the
@@ -4221,15 +4228,19 @@ not judged by eye or ear.**
   parsed to its end: the frames 8 × `3E/12`, an icon `34/9` and `24/7` faces then
   four `E3/2`.
 
-Measured 2026-11-16, slot 2 in fdat05, `KF2_SHORTCUTS=1 KF2_SHORTCUTS_PROBE=1` through
-`KF2_SHELL`: `cross faded` 4.5 s after the last press; `hands weapon` gave `stepped,
+Measured 2026-11-16, windowed, the world held with `pause on`: `snap hash` changed
+between the solid cross and the faded one (126,161 pixels, 3.4% of 2568 × 1440) and
+not again a second later; `cross faded, 20144 packets drawn faded so far`;
+`KF2_FPS=144 KF2_FPS_PROBE=1` 144.0 fps drawn. Earlier the same day, headless, slot 2
+in fdat05, `KF2_SHORTCUTS=1 KF2_SHORTCUTS_PROBE=1` through `KF2_SHELL`: `cross faded`
+4.5 s after the last press; `hands weapon` gave `stepped,
 sound 0x10`, `Weapon card pulses (1 -> 0)` and `cross solid`, and back again;
 `hands spell` and `hands next` with nothing to go to gave `Magic refused, flash and
 sound 0x12` and `Hotkey refused, ...`, `hands weapon` with nothing put away `Weapon
 refused, ...`. Windowed with `KF2_AUDIO_PROBE=1`, six refusals took the live voices
 from 8 to 10 and back to 8 once they ended. This fits the sound being keyed, but it
 was not heard. `python3 scripts/fuzz.py --runs 12 --env KF2_SHORTCUTS=1`: 0 findings.
-**Not judged**: the dimmed and see-through look, the pulse, the red flash, and whether the
+**Not judged**: the 25% fade (the semi-bit cut was judged and rejected), the pulse, the red flash, and whether the
 two sounds are the right ones and loud enough.
 
 ## NPC dialogue
