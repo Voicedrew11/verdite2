@@ -1,0 +1,131 @@
+diff --git a/RecompOne.Recompiler/CodeGen/FunctionEmmiter.cs b/RecompOne.Recompiler/CodeGen/FunctionEmmiter.cs
+index a5ec45a..a9b263b 100644
+--- a/RecompOne.Recompiler/CodeGen/FunctionEmmiter.cs
++++ b/RecompOne.Recompiler/CodeGen/FunctionEmmiter.cs
+@@ -63,6 +63,10 @@ public static class FunctionEmitter
+         sb.AppendLine(noInline);
+ 
+         var body = new StringBuilder();
++        //0113. One byte per function, for a fuzzer's coverage.
++        if (ctx.Coverage)
++            body.AppendLine(
++                $"        if (RecompOne.Runtime.Diagnostics.Coverage.On) RecompOne.Runtime.Diagnostics.Coverage.Hits[{ctx.CoverageIndex}] = 1;");
+         if (ctx.Debug)
+             body.AppendLine(
+                 $"        System.Console.WriteLine(\"{func.EmittedName} @ {func.OverlayName} @ 0x{func.Start:X8}\");");
+diff --git a/RecompOne.Recompiler/CodeGen/InstructionEmitter.cs b/RecompOne.Recompiler/CodeGen/InstructionEmitter.cs
+index c8d2108..dddf6c9 100644
+--- a/RecompOne.Recompiler/CodeGen/InstructionEmitter.cs
++++ b/RecompOne.Recompiler/CodeGen/InstructionEmitter.cs
+@@ -465,6 +465,8 @@ public sealed class FunctionContext
+     public HashSet<uint> Labels = [];
+     public HashSet<uint> BackEdges = []; //fpr irq
+     public bool Debug;
++    public bool Coverage;
++    public int CoverageIndex;
+     public bool AddressComments;
+     public bool DisasmComments;
+     public Dictionary<uint, JumpTable> JumpTablesByJr = [];
+diff --git a/RecompOne.Recompiler/CodeGen/OverlayWriter.cs b/RecompOne.Recompiler/CodeGen/OverlayWriter.cs
+index 332d999..98c2925 100644
+--- a/RecompOne.Recompiler/CodeGen/OverlayWriter.cs
++++ b/RecompOne.Recompiler/CodeGen/OverlayWriter.cs
+@@ -264,6 +264,24 @@ public static class OverlayWriter
+         var conflictCount = allFuncs.Count - knownFuncs.Count;
+         Console.WriteLine($"[Recompiler] total functions: {allFuncs.Count}");
+ 
++        //0113. Coverage indices, assigned here in emission order (overlay, class, then address) so they are
++        // deterministic and unique across all overlays; stubs and patches have no body to mark.
++        Dictionary<MipsFunction, int>? coverage = null;
++        if (config.Coverage)
++        {
++            coverage = new Dictionary<MipsFunction, int>(ReferenceEqualityComparer.Instance);
++            foreach (var result in overlayResults)
++            foreach (var part in overlayParts[result.Name])
++            foreach (var func in part.Functions)
++            {
++                if (func.IsStub || func.IsPatch) continue;
++                if (coverage.Count >= RecompOne.Runtime.Diagnostics.Coverage.Capacity)
++                    throw new InvalidOperationException(
++                        $"[recompiler] coverage: more than {RecompOne.Runtime.Diagnostics.Coverage.Capacity} functions; raise Coverage.Capacity");
++                coverage[func] = coverage.Count;
++            }
++        }
++
+         string? mainCall = null;
+         if (config.Main != null)
+         {
+@@ -281,7 +299,17 @@ public static class OverlayWriter
+             EmitOverlayFile(result.Name, overlayParts[result.Name], knownFuncs, config.Debug,
+                 config.AddressComments, config.DisasmComments, result.LbaStart, result.Base, result.Size,
+                 result.Instructions, outDir,
+-                SymbolRelocator.Plan(result.Functions, config.Relocations, result.Name));
++                SymbolRelocator.Plan(result.Functions, config.Relocations, result.Name), coverage);
++        }
++
++        if (coverage != null)
++        {
++            var tsv = new StringBuilder();
++            tsv.Append("index\toverlay\taddress\tname\n");
++            foreach (var (func, index) in coverage.OrderBy(kv => kv.Value).Select(kv => (kv.Key, kv.Value)))
++                tsv.Append($"{index}\t{func.OverlayName}\t0x{func.Start:X8}\t{func.EmittedName}\n");
++            File.WriteAllText(Path.Combine(outDir, "coverage.tsv"), tsv.ToString());
++            Console.WriteLine($"[Recompiler] coverage: {coverage.Count} indexed functions, coverage.tsv written");
+         }
+ 
+         Console.WriteLine("[Recompiler] Emitting Entry.cs");
+@@ -331,7 +359,7 @@ public static class OverlayWriter
+     private static void EmitOverlayFile(string overlayName, List<OverlayPart> parts,
+         Dictionary<uint, string> knownFuncs, bool debug, bool addressComments,
+         bool disasmComments, int lbaStart, uint ovlBase, uint ovlSize, MipsInstruction[] instrs, string outDir,
+-        Dictionary<uint, uint> relocations)
++        Dictionary<uint, uint> relocations, Dictionary<MipsFunction, int>? coverage)
+     {
+         var funcs = parts.SelectMany(p => p.Functions).ToList();
+         var partClass = new Dictionary<uint, string>();
+@@ -363,6 +391,8 @@ public static class OverlayWriter
+                     Labels = labels,
+                     BackEdges = backEdges,
+                     Debug = debug,
++                    Coverage = coverage != null && coverage.ContainsKey(func),
++                    CoverageIndex = coverage != null && coverage.TryGetValue(func, out var coverageIndex) ? coverageIndex : 0,
+                     AddressComments = addressComments,
+                     DisasmComments = disasmComments,
+                     JumpTablesByJr = func.JumpTables.ToDictionary(j => j.JrVram),
+diff --git a/RecompOne.Recompiler/Config/ConfigLoader.cs b/RecompOne.Recompiler/Config/ConfigLoader.cs
+index a5d646b..740aa2a 100644
+--- a/RecompOne.Recompiler/Config/ConfigLoader.cs
++++ b/RecompOne.Recompiler/Config/ConfigLoader.cs
+@@ -31,6 +31,7 @@ public sealed class RecompOneConfig
+     } //linear sweep is to find functions when the elf doesnt ptovide then properly (fuck you sh) this can and WILL get some data as code, use it by your own risk
+ 
+     [JsonPropertyName("debug")] public bool Debug { get; set; }
++    [JsonPropertyName("coverage")] public bool Coverage { get; set; }
+     [JsonPropertyName("addressComments")] public bool AddressComments { get; set; }
+     [JsonPropertyName("disasmComments")] public bool DisasmComments { get; set; }
+     [JsonPropertyName("overlays")] public OverlayConfig[] Overlays { get; set; } = [];
+diff --git a/RecompOne.Runtime/Diagnostics/Coverage.cs b/RecompOne.Runtime/Diagnostics/Coverage.cs
+new file mode 100644
+index 0000000..57d2148
+--- /dev/null
++++ b/RecompOne.Runtime/Diagnostics/Coverage.cs
+@@ -0,0 +1,19 @@
++namespace RecompOne.Runtime.Diagnostics;
++
++/// <summary>Which recompiled functions ran: one byte per function, indexed by the
++/// number the recompiler gave it under "coverage": true (its coverage.tsv names them).</summary>
++public static class Coverage
++{
++    public const int Capacity = 65536;
++    public static bool On;
++    public static readonly byte[] Hits = new byte[Capacity];
++
++    /// <summary>The indices hit so far, ascending.</summary>
++    public static List<int> HitIndices()
++    {
++        var hit = new List<int>();
++        for (var i = 0; i < Capacity; i++)
++            if (Hits[i] != 0) hit.Add(i);
++        return hit;
++    }
++}

@@ -142,7 +142,7 @@ public static class HostWindow
         Pgxp.Pgxp.Load();
         Interp.Interp.Load();
 
-        //0111.
+        //0112.
         if (Runtime.Headless)
         {
             Console.WriteLine("[Host] headless: no window, no gl context");
@@ -723,13 +723,17 @@ public static class HostWindow
     // the whole of the reach.
     public static bool IsPadConnected(int pad) => InputManager.IsPadConnected(pad);
 
-    //0112. A pad's own buttons rewritten before they join the keyboard's; see
+    //0123. A pad's own buttons rewritten before they join the keyboard's; see
     //InputManager.PadButtons. Set once, by the game, before the first poll.
     public static Func<int, ushort, ushort>? PadButtons
     {
         get => InputManager.PadButtons;
         set => InputManager.PadButtons = value;
     }
+
+    //0125. The buttons pad port holds this poll only through a stick binding
+    //(active high); valid inside PadButtons. See InputManager.StickButtons.
+    public static ushort PadStickButtons(int port) => InputManager.StickButtons(port);
 
     /// <summary>The first pad button held down right now, or null. Face and
     /// shoulder buttons are their SDL index, the triggers are 100/101 and the

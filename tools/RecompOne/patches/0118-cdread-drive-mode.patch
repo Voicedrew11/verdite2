@@ -1,0 +1,26 @@
+diff --git a/RecompOne.Runtime/sdk/LibCd.cs b/RecompOne.Runtime/sdk/LibCd.cs
+index 482629a..be5fb3c 100644
+--- a/RecompOne.Runtime/sdk/LibCd.cs
++++ b/RecompOne.Runtime/sdk/LibCd.cs
+@@ -222,7 +222,11 @@ public static class LibCd
+     {
+         var sectors = (int)c.A0;
+         var buf = c.A1;
+-        _mode = (byte)c.A2;
++        //0118. libcd sizes the copy by the caller's mode but always runs the drive
++        //with ModeSize1, so it can check each sector's header. The drive stays that
++        //way after the read, and a game's own ReadN relies on it.
++        var callerMode = (byte)c.A2;
++        _mode = (byte)(callerMode | ModeSize1);
+         var lba = CurrentLba;
+ 
+         _xaActive = false;
+@@ -239,7 +243,7 @@ public static class LibCd
+             return;
+         }
+ 
+-        var size = SectorSize(_mode);
++        var size = SectorSize(callerMode);
+         Dispatcher.LoadByLba(lba);
+         Log.Sdk($"CdRead sectors={sectors} buf=0x{buf:X8} mode=0x{_mode:X2} lba={lba} size={size}");
+ 

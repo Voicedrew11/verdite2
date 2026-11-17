@@ -14,7 +14,7 @@ namespace Kf2.Japanese;
 ///
 ///     KF2_JP_BUTTONS=0    keep the US buttons in a Japanese run -- comparison only
 ///
-/// The physical pad's two bits trade places as the runtime polls it (0112's
+/// The physical pad's two bits trade places as the runtime polls it (0123's
 /// <see cref="HostWindow.PadButtons"/>), not the game's table and not the bindings: the
 /// keyboard (F still uses, Tab and Escape still open the menu), the mouse, and every
 /// button the port presses itself (auto start, shortcuts, the menu pointer) keep their

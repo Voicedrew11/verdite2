@@ -42,7 +42,11 @@
     "kf2.analog.accel": "False",
     "kf2.enemyturn": "1",
     "kf2.widescreen.hud": "False",
-    "kf2.renderdistance": "10.5"
+    "kf2.renderdistance": "10.5",
+    "kf2.text.font": "1",
+    "kf2.cursormemory.on": "False",
+    "kf2.npcdialogue.on": "False",
+    "kf2.shortcuts.on": "False"
   },
   "display": [
     {
@@ -349,6 +353,33 @@
               }
             }
           ]
+        },
+        {
+          "id": "shortcuts",
+          "label": "kf2.setup.shortcuts",
+          "tiers": [
+            {
+              "label": "kf2.setup.shortcuts.0.name",
+              "desc": "kf2.setup.shortcuts.0",
+              "set": {
+                "kf2.shortcuts.on": null
+              }
+            },
+            {
+              "label": "kf2.setup.shortcuts.0.name",
+              "desc": "kf2.setup.shortcuts.1",
+              "set": {
+                "kf2.shortcuts.on": null
+              }
+            },
+            {
+              "label": "kf2.setup.shortcuts.2.name",
+              "desc": "kf2.setup.shortcuts.2",
+              "set": {
+                "kf2.shortcuts.on": "True"
+              }
+            }
+          ]
         }
       ]
     },
@@ -398,6 +429,33 @@
                 "kf2.truecolor.on": null,
                 "kf2.aniso.level": null,
                 "kf2.mipmaps.on": null
+              }
+            }
+          ]
+        },
+        {
+          "id": "lettering",
+          "label": "kf2.setup.lettering",
+          "tiers": [
+            {
+              "label": "kf2.setup.lettering.0.name",
+              "desc": "kf2.setup.lettering.0",
+              "set": {
+                "kf2.text.font": "0"
+              }
+            },
+            {
+              "label": "kf2.setup.lettering.0.name",
+              "desc": "kf2.setup.lettering.1",
+              "set": {
+                "kf2.text.font": "0"
+              }
+            },
+            {
+              "label": "kf2.setup.lettering.2.name",
+              "desc": "kf2.setup.lettering.2",
+              "set": {
+                "kf2.text.font": null
               }
             }
           ]
@@ -604,6 +662,36 @@
               "desc": "kf2.setup.gear.2",
               "set": {
                 "kf2.gearcompare.enabled": null
+              }
+            }
+          ]
+        },
+        {
+          "id": "menus",
+          "label": "kf2.setup.menus",
+          "tiers": [
+            {
+              "label": "kf2.setup.menus.0.name",
+              "desc": "kf2.setup.menus.0",
+              "set": {
+                "kf2.cursormemory.on": null,
+                "kf2.npcdialogue.on": null
+              }
+            },
+            {
+              "label": "kf2.setup.menus.1.name",
+              "desc": "kf2.setup.menus.1",
+              "set": {
+                "kf2.cursormemory.on": "True",
+                "kf2.npcdialogue.on": null
+              }
+            },
+            {
+              "label": "kf2.setup.menus.2.name",
+              "desc": "kf2.setup.menus.2",
+              "set": {
+                "kf2.cursormemory.on": "True",
+                "kf2.npcdialogue.on": "True"
               }
             }
           ]
@@ -1179,6 +1267,101 @@
       "en": "Reload last save",
       "pt-BR": "Recarregar último save",
       "es-419": "Recargar último guardado"
+    },
+    "kf2.setup.shortcuts": {
+      "en": "Hands and hotkeys",
+      "pt-BR": "Mãos e atalhos",
+      "es-419": "Manos y atajos"
+    },
+    "kf2.setup.shortcuts.0.name": {
+      "en": "Controls as released",
+      "pt-BR": "Controles originais",
+      "es-419": "Controles originales"
+    },
+    "kf2.setup.shortcuts.2.name": {
+      "en": "Two hands, five hotkeys",
+      "pt-BR": "Duas mãos, cinco atalhos",
+      "es-419": "Dos manos, cinco atajos"
+    },
+    "kf2.setup.shortcuts.0": {
+      "en": "The controls as released: one weapon, one attack spell, and the Select shortcut.",
+      "pt-BR": "Os controles originais: uma arma, uma magia de ataque e o atalho do Select.",
+      "es-419": "Los controles originales: un arma, un hechizo de ataque y el atajo de Select."
+    },
+    "kf2.setup.shortcuts.1": {
+      "en": "The controls as released: one weapon, one attack spell, and the Select shortcut.",
+      "pt-BR": "Os controles originais: uma arma, uma magia de ataque e o atalho do Select.",
+      "es-419": "Los controles originales: un arma, un hechizo de ataque y el atajo de Select."
+    },
+    "kf2.setup.shortcuts.2": {
+      "en": "Two weapons and two attack spells in hand, and five hotkeys: R1 swings, L1 casts, Square uses a hotkey, the D-pad swaps hands and cycles hotkeys. Assigned from the Equipment menu.",
+      "pt-BR": "Duas armas e duas magias de ataque nas mãos, e cinco atalhos: R1 ataca, L1 lança magia, Quadrado usa um atalho, o direcional troca as mãos e percorre os atalhos. Atribuídos no menu de equipamento.",
+      "es-419": "Dos armas y dos hechizos de ataque en mano, y cinco atajos: R1 ataca, L1 lanza el hechizo, Cuadrado usa un atajo, la cruceta cambia de mano y recorre los atajos. Se asignan desde el menú de equipo."
+    },
+    "kf2.setup.lettering": {
+      "en": "Lettering",
+      "pt-BR": "Letras",
+      "es-419": "Letras"
+    },
+    "kf2.setup.lettering.0.name": {
+      "en": "Classic font",
+      "pt-BR": "Fonte clássica",
+      "es-419": "Fuente clásica"
+    },
+    "kf2.setup.lettering.2.name": {
+      "en": "Modern font",
+      "pt-BR": "Fonte moderna",
+      "es-419": "Fuente moderna"
+    },
+    "kf2.setup.lettering.0": {
+      "en": "The game's own capital letters, as the PlayStation drew them.",
+      "pt-BR": "As letras maiúsculas do próprio jogo, como o PlayStation desenhava.",
+      "es-419": "Las mayúsculas propias del juego, como las dibujaba la PlayStation."
+    },
+    "kf2.setup.lettering.1": {
+      "en": "The game's own capital letters, as the PlayStation drew them.",
+      "pt-BR": "As letras maiúsculas do próprio jogo, como o PlayStation desenhava.",
+      "es-419": "Las mayúsculas propias del juego, como las dibujaba la PlayStation."
+    },
+    "kf2.setup.lettering.2": {
+      "en": "New fonts with lower case and even spacing, and the signs and dialogue redrawn in them.",
+      "pt-BR": "Fontes novas com minúsculas e espaçamento uniforme, e as placas e diálogos redesenhados com elas.",
+      "es-419": "Fuentes nuevas con minúsculas y espaciado uniforme, y los carteles y diálogos redibujados con ellas."
+    },
+    "kf2.setup.menus": {
+      "en": "Menus and conversations",
+      "pt-BR": "Menus e conversas",
+      "es-419": "Menús y conversaciones"
+    },
+    "kf2.setup.menus.0.name": {
+      "en": "As released",
+      "pt-BR": "Como no lançamento",
+      "es-419": "Como en el lanzamiento"
+    },
+    "kf2.setup.menus.1.name": {
+      "en": "Menus remember",
+      "pt-BR": "Menus lembram",
+      "es-419": "Los menús recuerdan"
+    },
+    "kf2.setup.menus.2.name": {
+      "en": "King's Field III's",
+      "pt-BR": "Como King's Field III",
+      "es-419": "Como King's Field III"
+    },
+    "kf2.setup.menus.0": {
+      "en": "The menus and conversations as released.",
+      "pt-BR": "Os menus e as conversas como no lançamento.",
+      "es-419": "Los menús y las conversaciones como en el lanzamiento."
+    },
+    "kf2.setup.menus.1": {
+      "en": "The Items and Magic pages open where you left them, and the equipment menus on what is equipped.",
+      "pt-BR": "As páginas de Itens e Magias abrem onde você parou, e os menus de equipamento no que está equipado.",
+      "es-419": "Las páginas de Objetos y Magia se abren donde las dejaste, y los menús de equipo en lo equipado."
+    },
+    "kf2.setup.menus.2": {
+      "en": "Menus remember, and in a conversation Interact goes straight to the next line and Cancel ends it, as in King's Field III.",
+      "pt-BR": "Os menus lembram, e numa conversa Interagir vai direto para a próxima fala e Cancelar a encerra, como em King's Field III.",
+      "es-419": "Los menús recuerdan, y en una conversación Interactuar pasa directo a la siguiente línea y Cancelar la termina, como en King's Field III."
     }
   }
 }

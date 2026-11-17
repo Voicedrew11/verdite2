@@ -70,7 +70,8 @@ public sealed partial class GlCore
     {
         if (!RemasterUniforms.Active || _progWorld == 0 || _uLightShadow < 0) return;
         int size = Math.Clamp(RemasterUniforms.ShadowSize, 64, 4096);
-        int gen = RetainedScene.StaticGeneration;
+        // Any change to the map, a patch included, redraws the shadows.
+        int gen = RetainedScene.StaticRevision;
         bool map = RetainedScene.Static.Length > 0;
         int mask = 0;
         bool casters = TakeCasters();

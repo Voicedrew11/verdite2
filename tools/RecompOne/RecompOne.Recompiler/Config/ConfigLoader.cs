@@ -31,6 +31,7 @@ public sealed class RecompOneConfig
     } //linear sweep is to find functions when the elf doesnt ptovide then properly (fuck you sh) this can and WILL get some data as code, use it by your own risk
 
     [JsonPropertyName("debug")] public bool Debug { get; set; }
+    [JsonPropertyName("coverage")] public bool Coverage { get; set; }
     [JsonPropertyName("addressComments")] public bool AddressComments { get; set; }
     [JsonPropertyName("disasmComments")] public bool DisasmComments { get; set; }
     [JsonPropertyName("overlays")] public OverlayConfig[] Overlays { get; set; } = [];

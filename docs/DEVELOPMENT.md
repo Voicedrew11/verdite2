@@ -254,7 +254,7 @@ its recording.
 
 Four switches, each usable alone:
 
-- **`KF2_HEADLESS=1`** (`0111`): no window, no GL context, no audio device. The
+- **`KF2_HEADLESS=1`** (`0112`): no window, no GL context, no audio device. The
   software GPU still takes every packet, but does not rasterize
   (`KF2_HEADLESS_RASTER=1` puts the pixels back); that was half of a headless
   frame. There is no ImGui and no host-thread pump, so anything that waits on

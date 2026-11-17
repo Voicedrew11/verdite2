@@ -308,10 +308,10 @@ public static class PortSettings
         tip: "The Items and Magic pages open on what you last highlighted, and the equipment menus on what is equipped.",
         usable: () => !CursorMemory.StoodDown);
 
-    /// <summary>Five Select shortcuts. Their keys, buttons and labels stay in the Settings window.</summary>
+    /// <summary>Souls-style hands and hotkeys. Their keys and labels stay in the Settings window.</summary>
     public static readonly PortSetting ShortcutsOn = Switch(Shortcuts.Shortcuts.OnKey, "KF2_SHORTCUTS", "Shortcuts",
         ControlsPage, "SHORTCUTS", () => Shortcuts.Shortcuts.Enabled, v => Shortcuts.Shortcuts.Enabled = v, false,
-        tip: "Five Select shortcuts, on keys 1-5 or Select and the d-pad, each holding an item or a spell. Assign them from Equipment.",
+        tip: "Two weapons and two spells in hand, five hotkeys: R1 swings, L1 casts, Square uses a hotkey, the d-pad swaps and cycles, the sticks move. Assign from Equipment.",
         usable: () => !Shortcuts.Shortcuts.StoodDown);
 
     /// <summary>NPC conversations as King's Field III's: Interact goes to the next line.

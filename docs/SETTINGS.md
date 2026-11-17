@@ -100,7 +100,7 @@ HUD to OFF, pointing at row 1 moved it back, a click at (5,230) opened the quest
 | | MOUSE SENS | X0.25 … X5 | `kf2.mouse.turn` and `kf2.mouse.look`, as STICK SENS; dimmed only under `KF2_MOUSE=0` |
 | | GYRO | OFF, ON | `kf2.itemturn.gyro` and `kf2.gyroaim.on`: a held item (picked up or previewed) turns and a drawn bow aims with the pad's gyroscope (INPUT, "Turning a picked-up item", "Rumble and gyro aim with a drawn bow"); a pair set apart shows CUSTOM |
 | | RUMBLE | OFF, ON, HD | `kf2.rumble.on`, `kf2.rumble.hd`; OFF leaves the HD choice |
-| | SHORTCUTS | OFF, ON | `kf2.shortcuts.on`: five Select shortcuts on keys 1-5 or Select and the d-pad, each an item or a spell (PATCHES_AND_MODS, "Shortcuts"); on CONTROLS because GAMEPLAY is full at seven rows; keys and buttons in the Settings window; dimmed while the Shortcuts mod is enabled |
+| | SHORTCUTS | OFF, ON | `kf2.shortcuts.on`: Souls-style hands and hotkeys, the pad laid out for them (R1 swings, L1 casts, Square uses a hotkey, the d-pad swaps and cycles) (PATCHES_AND_MODS, "Shortcuts"); on CONTROLS because GAMEPLAY is full at seven rows; keys in the Settings window; dimmed while the Shortcuts mod is enabled |
 | SOUND | 3D AUDIO | ORIGINAL, SPEAKERS, HEADPHONES | `kf2.audio.positional` (AUDIO, "Positional audio") |
 
 The minimap has no saved key (N toggles it for the session). The map's pad button
@@ -200,7 +200,14 @@ on the first returns to the display. Every group has three tiers:
   the controls and conveniences that keep the game's own pace, and the last save
   reloaded on death.
 * **Modern**: the port's own choices for each feature already judged: the HUD at the edges and the world drawn out to 15 tiles (the
-  View group), and the turning page's twin sticks with acceleration. The remaster
+  View group), and the turning page's twin sticks with acceleration.
+* The port's built-in mods follow the tiers too: the font is Classic in Original
+  and Original++ and Modern in Modern (Lettering); cursor memory is on in
+  Original++ and Modern, NPC dialogue in Modern (Menus and conversations); and
+  Shortcuts is on in Modern only (Hands and hotkeys, under Controls). All three
+  switches ship off by default, so Modern writes them; the font's default is
+  Modern, so Modern writes nothing for it. The spec's `version` was not raised for
+  them, so a player who finished setup is not asked again. The remaster
   packs stay off, as they ship; murky water is off in every tier and by default.
 
 After the tiers comes **the turning page** (`pages` in the spec, `"id": "turning"`),

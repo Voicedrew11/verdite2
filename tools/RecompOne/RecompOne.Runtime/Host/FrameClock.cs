@@ -146,7 +146,7 @@ internal static class FrameClock
     {
         var now = Now;
 
-        //0111. Turbo already forces the vblank wait; the present's own ceiling
+        //0112. Turbo already forces the vblank wait; the present's own ceiling
         //would otherwise still hold it to the target rate.
         var frameMs = Interrupts.Turbo ? 0.0 : CeilingMs;
         if (frameMs <= 0.0)

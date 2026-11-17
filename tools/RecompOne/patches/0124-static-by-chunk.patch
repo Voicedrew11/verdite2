@@ -1,0 +1,597 @@
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+index 97bb0a7..e6634b5 100644
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+@@ -990,9 +990,11 @@ public sealed partial class GlCore
+     unsafe bool SortWater(RetainedScene.Frame f, in RetainedScene.View v, byte[] halves)
+     {
+         var st = RetainedScene.Static;
+-        if (_wCentreGen != RetainedScene.StaticGeneration)
++        // A patch moves corners too; recomputed whole (a millisecond), since a quad's
++        // two triangles may sit in two chunks.
++        if (_wCentreGen != RetainedScene.StaticRevision)
+         {
+-            _wCentreGen = RetainedScene.StaticGeneration;
++            _wCentreGen = RetainedScene.StaticRevision;
+             if (_wCentre.Length < st.Length) _wCentre = new float[st.Length];
+             for (int i = RetainedScene.StaticStart[1]; i + 2 < st.Length; i += 3)
+             {
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlRetained.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlRetained.cs
+index 9b43b8d..a28edfc 100644
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlRetained.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlRetained.cs
+@@ -19,8 +19,12 @@ public sealed partial class GlCore
+     // uploaded the new map: drawn by the new table, a larger map's ranges ran past the
+     // old buffer's end, which NVIDIA's driver faults on.
+     readonly int[] _worldChunkStart = new int[5 * RetainedScene.Chunks], _worldChunkCount = new int[5 * RetainedScene.Chunks];
++    readonly int[] _worldChunkCap = new int[5 * RetainedScene.Chunks];
+     readonly int[] _worldStaticCount = new int[5];
+     int _worldVerts;
++    // The revision of the static map the buffer holds, and a patch's ranges to send.
++    int _worldRev = -1;
++    readonly List<(int Start, int Count)> _worldDirty = new();
+     int _uwR, _uwCam, _uwT, _uwH, _uwC, _uwFb, _uwNear, _uwCueH, _uwFogOn, _uwMirror, _uwPlaneY, _uwPlaneBias;
+     int _uwScale, _uwAniso, _uwBlend, _uwBlendOpaque, _uwFluidN;
+     int _uwAtmosOn, _uwAtmosColour, _uwAtmosShape, _uwAtmosSkip;
+@@ -317,12 +321,24 @@ public sealed partial class GlCore
+     }
+ 
+     /// <summary>The static map, when it was rebuilt since the last upload.</summary>
+-    void UploadStatic()
++    unsafe void UploadStatic()
+     {
+         UploadRecords();
+         UploadNbHalves();
+-        if (_worldGen == RetainedScene.StaticGeneration) return;
++        if (_worldGen == RetainedScene.StaticGeneration && _worldRev == RetainedScene.StaticRevision) return;
+         var s = RetainedScene.Static;
++        // A patch of the same layout: only the slots it rewrote.
++        if (_worldGen == RetainedScene.StaticGeneration && RetainedScene.DirtySince(_worldRev, _worldDirty))
++        {
++            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _worldVbo);
++            foreach (var (start, count) in _worldDirty)
++                _gl.BufferSubData<RetainedScene.Vertex>(BufferTargetARB.ArrayBuffer, start * sizeof(RetainedScene.Vertex), s.Slice(start, count));
++            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
++            CopyChunkTables();
++            RetainedScene.StaticPatchUploads++;
++            _worldRev = RetainedScene.StaticRevision;
++            return;
++        }
+         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _worldVbo);
+         _gl.BufferData<RetainedScene.Vertex>(BufferTargetARB.ArrayBuffer, s, BufferUsageARB.StaticDraw);
+         // The mip entries are attribute 9 of the same VAO, and UpdateWorldMips sizes them
+@@ -334,11 +350,18 @@ public sealed partial class GlCore
+             _gl.BufferData<uint>(BufferTargetARB.ArrayBuffer, new uint[Math.Max(s.Length, 1)], BufferUsageARB.StaticDraw);
+         }
+         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
++        CopyChunkTables();
++        _worldVerts = s.Length;
++        _worldGen = RetainedScene.StaticGeneration;
++        _worldRev = RetainedScene.StaticRevision;
++    }
++
++    void CopyChunkTables()
++    {
+         Array.Copy(RetainedScene.ChunkStart, _worldChunkStart, _worldChunkStart.Length);
+         Array.Copy(RetainedScene.ChunkCount, _worldChunkCount, _worldChunkCount.Length);
++        Array.Copy(RetainedScene.ChunkCap, _worldChunkCap, _worldChunkCap.Length);
+         Array.Copy(RetainedScene.StaticCount, _worldStaticCount, _worldStaticCount.Length);
+-        _worldVerts = s.Length;
+-        _worldGen = RetainedScene.StaticGeneration;
+     }
+ 
+     unsafe void UploadWorld(RetainedScene.Frame f)
+@@ -490,13 +513,19 @@ public sealed partial class GlCore
+     {
+         int drawn = 0;
+         _gl.BindVertexArray(_worldVao);
+-        // Runs of neighbouring visible chunks are one draw.
+-        int first = -1, count = 0;
++        // Runs of neighbouring visible chunks are one draw, the spare room between
++        // them (degenerate, RetainedScene.IsPad) drawn through.
++        int first = -1, room = 0, count = 0;
+         for (int c = 0; c <= RetainedScene.Chunks; c++)
+         {
+             int k = r * RetainedScene.Chunks + c;
+             bool take = c < RetainedScene.Chunks && _chunkVis[c] && _worldChunkCount[k] > 0;
+-            if (take && first >= 0 && _worldChunkStart[k] == first + count) { count += _worldChunkCount[k]; continue; }
++            if (take && first >= 0 && _worldChunkStart[k] == first + room)
++            {
++                count = room + _worldChunkCount[k];
++                room += _worldChunkCap[k];
++                continue;
++            }
+             count = Math.Min(count, _worldVerts - first);
+             if (first >= 0 && count > 0)
+             {
+@@ -505,6 +534,7 @@ public sealed partial class GlCore
+             }
+             first = take ? _worldChunkStart[k] : -1;
+             count = take ? _worldChunkCount[k] : 0;
++            room = take ? _worldChunkCap[k] : 0;
+         }
+         return drawn;
+     }
+@@ -895,7 +925,10 @@ public sealed partial class GlCore
+     readonly List<(int TPage, int Clut, uint Rect)> _mipKeys = new();
+     uint[] _mipKeyEntry = [];
+     uint[] _dynMip = [];
+-    int _mipKeysGen = -1;
++    int _mipKeysGen = -1, _mipKeysRev = -1;
++    // Each static corner's key, one plus the key or 0, as _worldMipVbo holds them.
++    uint[] _mipIndex = [];
++    readonly List<(int Start, int Count)> _mipDirty = new();
+     bool _mipTableDirty;
+     uint _mipTableBuf, _mipTableTex;
+     int _uwMipIndirect = -1;
+@@ -918,9 +951,35 @@ public sealed partial class GlCore
+     {
+         bool on = RetainedScene.Mips && GteDepth.Mipmaps && _mip != null && _uwMipOn >= 0;
+         var st = RetainedScene.Static;
+-        if (_mipKeysGen != RetainedScene.StaticGeneration)
++        if (_mipKeysGen == RetainedScene.StaticGeneration && _mipKeysRev != RetainedScene.StaticRevision
++            && RetainedScene.DirtySince(_mipKeysRev, _mipDirty))
++        {
++            // A patch: the rewritten slots' keys; a texture new to the map is a new key.
++            _mipKeysRev = RetainedScene.StaticRevision;
++            int had = _mipKeys.Count;
++            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _worldMipVbo);
++            foreach (var (start, count) in _mipDirty)
++            {
++                for (int i = start; i + 2 < start + count; i += 3)
++                {
++                    uint k = (uint)(MipKey(st[i]) + 1);
++                    _mipIndex[i] = _mipIndex[i + 1] = _mipIndex[i + 2] = k;
++                }
++                _gl.BufferSubData<uint>(BufferTargetARB.ArrayBuffer, start * 4, new ReadOnlySpan<uint>(_mipIndex, start, count));
++            }
++            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
++            if (_mipKeys.Count > had)
++            {
++                Array.Resize(ref _mipKeyEntry, _mipKeys.Count);
++                Array.Resize(ref _mipLooked, _mipKeys.Count);
++                _mipTableDirty = true;
++            }
++            IndexHalfKeys(st, _mipIndex);
++        }
++        if (_mipKeysGen != RetainedScene.StaticGeneration || _mipKeysRev != RetainedScene.StaticRevision)
+         {
+             _mipKeysGen = RetainedScene.StaticGeneration;
++            _mipKeysRev = RetainedScene.StaticRevision;
+             _mipKeyAt.Clear();
+             _mipKeys.Clear();
+             var index = new uint[Math.Max(st.Length, 1)];
+@@ -934,6 +993,7 @@ public sealed partial class GlCore
+             _mipKeyEntry = new uint[Math.Max(_mipKeys.Count, 1)];
+             _mipLooked = new int[Math.Max(_mipKeys.Count, 1)];
+             _mipTableDirty = true;
++            _mipIndex = index;
+             IndexHalfKeys(st, index);
+         }
+         long l0 = System.Diagnostics.Stopwatch.GetTimestamp();
+@@ -1002,33 +1062,53 @@ public sealed partial class GlCore
+     /// built (one plus the key, 0 for none) and the half in each corner's flags.</summary>
+     void IndexHalfKeys(ReadOnlySpan<RetainedScene.Vertex> st, uint[] index)
+     {
++        // A counting pass by half, then each half's keys made distinct with a stamp per
++        // key: no sort, so a patch's re-index is cheap.
+         int halves = RetainedScene.HalvesW * RetainedScene.HalvesH;
+-        var pairs = new List<long>();
++        if (_halfKeyAt.Length != halves + 1) _halfKeyAt = new int[halves + 1];
++        Array.Clear(_halfKeyAt);
+         var lone = new HashSet<int>();
++        int pairs = 0;
++        for (int i = 0; i + 2 < st.Length; i += 3)
++        {
++            if (index[i] == 0) continue;
++            uint hid = (st[i].Flags >> RetainedScene.HalfShift) & RetainedScene.HalfBits;
++            if (hid == 0) { lone.Add((int)index[i] - 1); continue; }
++            if (hid - 1 < (uint)halves) { _halfKeyAt[hid]++; pairs++; }
++        }
++        for (int h = 0; h < halves; h++) _halfKeyAt[h + 1] += _halfKeyAt[h];
++        if (_halfPairs.Length < pairs) _halfPairs = new int[pairs * 2];
++        var put = _halfKeyAt.AsSpan(0, halves).ToArray();
+         for (int i = 0; i + 2 < st.Length; i += 3)
+         {
+             if (index[i] == 0) continue;
+-            int key = (int)index[i] - 1;
+             uint hid = (st[i].Flags >> RetainedScene.HalfShift) & RetainedScene.HalfBits;
+-            if (hid == 0) lone.Add(key);
+-            else pairs.Add((long)(hid - 1) << 32 | (uint)key);
++            if (hid == 0 || hid - 1 >= (uint)halves) continue;
++            _halfPairs[put[hid - 1]++] = (int)index[i] - 1;
+         }
+-        pairs.Sort();
+-        _halfKeyAt = new int[halves + 1];
+-        var keys = new List<int>();
+-        int p = 0;
++        if (_keyStamp.Length < _mipKeys.Count) _keyStamp = new int[Math.Max(_mipKeys.Count, 1) * 2];
++        Array.Clear(_keyStamp);
++        var keys = new List<int>(pairs / 4 + 1);
++        int at = 0;
+         for (int h = 0; h < halves; h++)
+         {
++            int end = _halfKeyAt[h + 1];
+             _halfKeyAt[h] = keys.Count;
+-            long last = -1;
+-            for (; p < pairs.Count && (pairs[p] >> 32) == h; p++)
+-                if (pairs[p] != last) { keys.Add((int)(pairs[p] & 0xFFFFFFFF)); last = pairs[p]; }
++            for (; at < end; at++)
++            {
++                int k = _halfPairs[at];
++                if (_keyStamp[k] == h + 1) continue;
++                _keyStamp[k] = h + 1;
++                keys.Add(k);
++            }
+         }
+         _halfKeyAt[halves] = keys.Count;
+         _halfKeys = keys.ToArray();
+         _loneKeys = lone.ToArray();
+     }
+ 
++    int[] _halfPairs = [], _keyStamp = [];
++
+     int MipKey(in RetainedScene.Vertex v)
+     {
+         int tp = (int)(v.Texpage + 0.5f), cl = (int)(v.Clut + 0.5f);
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlShadows.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlShadows.cs
+index a3295ce..e4d7982 100644
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlShadows.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlShadows.cs
+@@ -70,7 +70,8 @@ public sealed partial class GlCore
+     {
+         if (!RemasterUniforms.Active || _progWorld == 0 || _uLightShadow < 0) return;
+         int size = Math.Clamp(RemasterUniforms.ShadowSize, 64, 4096);
+-        int gen = RetainedScene.StaticGeneration;
++        // Any change to the map, a patch included, redraws the shadows.
++        int gen = RetainedScene.StaticRevision;
+         bool map = RetainedScene.Static.Length > 0;
+         int mask = 0;
+         bool casters = TakeCasters();
+diff --git a/RecompOne.Runtime/Gpu/RetainedScene.cs b/RecompOne.Runtime/Gpu/RetainedScene.cs
+index 2017f18..628fa5c 100644
+--- a/RecompOne.Runtime/Gpu/RetainedScene.cs
++++ b/RecompOne.Runtime/Gpu/RetainedScene.cs
+@@ -342,20 +342,38 @@ public static class RetainedScene
+     static Vertex[] _static = [];
+     static int _staticCount;
+ 
+-    /// <summary>Bumped on every <see cref="SetStatic"/>; the backend re-uploads.</summary>
++    /// <summary>Bumped when the static map is laid out again (<see cref="SetStatic"/>);
++    /// the backend uploads it whole.</summary>
+     public static int StaticGeneration { get; private set; }
+ 
++    /// <summary>Bumped on every change to the static map, a layout or a patch
++    /// (<see cref="PatchStatic"/>); what changed since a revision of the same layout is
++    /// <see cref="DirtySince"/>.</summary>
++    public static int StaticRevision { get; private set; }
++
++    /// <summary>The static map as laid out: every slot's corners followed by its spare
++    /// room, which holds degenerate triangles (<see cref="IsPad"/>). Iterate a slot by
++    /// <see cref="ChunkStart"/> and <see cref="ChunkCount"/>; a span of the whole may
++    /// include pads.</summary>
+     public static ReadOnlySpan<Vertex> Static => _static.AsSpan(0, _staticCount);
+ 
++    /// <summary>A spare corner in <see cref="Static"/>: all zero, so a triangle of three
++    /// draws nothing. A map corner always has a flag (<see cref="FlagRect"/>).</summary>
++    public static bool IsPad(in Vertex v) => v.Flags == 0;
++
++    /// <summary>Uploads of a patch's slots alone, for the probe.</summary>
++    public static long StaticPatchUploads;
++
+     /// <summary>The static map is kept in chunks of <see cref="ChunkTiles"/> tiles a
+     /// side, so a view draws only the chunks it can see. Sorted by range (opaque,
+     /// then each blend mode) and within a range by chunk; a chunk's triangles in a
+     /// range are <see cref="ChunkStart"/>/<see cref="ChunkCount"/> at
+-    /// <c>range * Chunks + chunk</c>.</summary>
++    /// <c>range * Chunks + chunk</c>, and the slot's room, its corners and the pads
++    /// after them, is <see cref="ChunkCap"/>.</summary>
+     public const int ChunkTiles = 8, ChunkSide = 80 / ChunkTiles, Chunks = ChunkSide * ChunkSide;
+     const float ChunkUnits = ChunkTiles * 2048f;
+ 
+-    public static readonly int[] ChunkStart = new int[5 * Chunks], ChunkCount = new int[5 * Chunks];
++    public static readonly int[] ChunkStart = new int[5 * Chunks], ChunkCount = new int[5 * Chunks], ChunkCap = new int[5 * Chunks];
+ 
+     /// <summary>Each chunk's bounds in world space, and whether it holds anything.</summary>
+     public static readonly float[] ChunkMin = new float[Chunks * 3], ChunkMax = new float[Chunks * 3];
+@@ -372,81 +390,244 @@ public static class RetainedScene
+     public static readonly Vertex[] ChunkFogOf = new Vertex[Chunks];
+ 
+     /// <summary>Draw ranges in <see cref="Static"/> as a whole: opaque first, then
+-    /// the semi-transparent triangles by blend mode.</summary>
++    /// the semi-transparent triangles by blend mode. A range's corners, not its room:
++    /// it spans its slots' rooms from <see cref="StaticStart"/>.</summary>
+     public static readonly int[] StaticStart = new int[5], StaticCount = new int[5];
+ 
+-    /// <summary>The static map, replaced whole. Sorted here into ranges and chunks.</summary>
++    /// <summary>A slot's room: its corners and an eighth more, at least 16 triangles,
++    /// so a door or a lift rewrites its chunk in place. An empty slot has none.</summary>
++    static int Room(int count) => count == 0 ? 0 : count + Math.Max(48, count / 24 * 3);
++
++    // What each patch rewrote, since the last layout, for the backend's upload.
++    static readonly List<(int Revision, int Start, int Count)> _dirty = new();
++    static int _dirtyBase;
++    const int MostDirty = 4096;
++
++    static int[] _keys = new int[1024];
++    static readonly int[] _count = new int[5 * Chunks], _put = new int[5 * Chunks];
++    static readonly bool[] _chunkDirty = new bool[Chunks];
++
++    /// <summary>The static map, laid out whole. Sorted here into ranges and chunks.</summary>
+     public static void SetStatic(ReadOnlySpan<Vertex> tris)
+     {
+-        if (_static.Length < tris.Length) _static = new Vertex[tris.Length];
+         int n = tris.Length / 3 * 3;
+-        Array.Clear(ChunkCount);
+-        Array.Clear(ChunkUsed);
+-        Array.Clear(_chunkRecords);
+-        for (int c = 0; c < Chunks; c++)
++        Count(tris, n);
++        for (int c = 0; c < Chunks; c++) ResetChunk(c);
++        int at = 0;
++        for (int k = 0; k < 5 * Chunks; k++)
+         {
+-            ChunkFogQ[c] = float.MaxValue;
+-            ChunkMin[c * 3] = ChunkMin[c * 3 + 1] = ChunkMin[c * 3 + 2] = float.MaxValue;
+-            ChunkMax[c * 3] = ChunkMax[c * 3 + 1] = ChunkMax[c * 3 + 2] = float.MinValue;
+-            ChunkBlendMin[c * 3] = ChunkBlendMin[c * 3 + 1] = ChunkBlendMin[c * 3 + 2] = float.MaxValue;
+-            ChunkBlendMax[c * 3] = ChunkBlendMax[c * 3 + 1] = ChunkBlendMax[c * 3 + 2] = float.MinValue;
++            ChunkStart[k] = at;
++            ChunkCount[k] = _count[k];
++            ChunkCap[k] = Room(_count[k]);
++            at += ChunkCap[k];
+         }
+-        var key = new int[n / 3];
++        if (_static.Length < at) _static = new Vertex[at];
++        Array.Clear(_static, 0, at);
++        Array.Copy(ChunkStart, _put, _put.Length);
++        for (int i = 0, t = 0; i < n; i += 3, t++) Place(tris, i, _keys[t]);
++        for (int r = 0; r < 5; r++) StaticStart[r] = ChunkStart[r * Chunks];
++        SumRanges();
++        _staticCount = at;
++        Array.Copy(ChunkFogQ, _chunkPlainQ, Chunks);
++        Array.Copy(ChunkFogOf, _chunkPlainOf, Chunks);
++        RecordFog();
++        StaticGeneration++;
++        StaticRevision++;
++        _dirty.Clear();
++        _dirtyBase = StaticRevision;
++    }
++
++    /// <summary>The static map with only some chunks changed: the marked chunks, and any
++    /// whose triangle count moved, are rewritten in their slots' room and the rest left
++    /// as they are, so the backend uploads those slots alone. False when a slot's new
++    /// corners do not fit its room or nothing is laid out: lay it out whole
++    /// (<see cref="SetStatic"/>). <paramref name="tris"/> is the whole map, as
++    /// <see cref="SetStatic"/> takes it.</summary>
++    public static bool PatchStatic(ReadOnlySpan<Vertex> tris, ReadOnlySpan<bool> chunks)
++    {
++        if (_staticCount == 0 || chunks.Length < Chunks) return false;
++        int n = tris.Length / 3 * 3;
++        Count(tris, n);
++        for (int c = 0; c < Chunks; c++) _chunkDirty[c] = chunks[c];
++        for (int k = 0; k < 5 * Chunks; k++)
++            if (_count[k] != ChunkCount[k]) _chunkDirty[k % Chunks] = true;
++        for (int k = 0; k < 5 * Chunks; k++)
++            if (_chunkDirty[k % Chunks] && _count[k] > ChunkCap[k]) return false;
++
++        for (int c = 0; c < Chunks; c++) if (_chunkDirty[c]) ResetChunk(c);
++        Array.Copy(ChunkStart, _put, _put.Length);
+         for (int i = 0, t = 0; i < n; i += 3, t++)
++            if (_chunkDirty[_keys[t] % Chunks]) Place(tris, i, _keys[t]);
++        StaticRevision++;
++        for (int k = 0; k < 5 * Chunks; k++)
+         {
+-            int c = ChunkOf(tris[i], tris[i + 1], tris[i + 2]);
+-            key[t] = Range(tris[i].Flags) * Chunks + c;
+-            ChunkCount[key[t]] += 3;
+-            ChunkUsed[c] = true;
+-            for (int k = 0; k < 3; k++)
+-            {
+-                ref readonly var v = ref tris[i + k];
+-                ChunkMin[c * 3] = Math.Min(ChunkMin[c * 3], v.X); ChunkMax[c * 3] = Math.Max(ChunkMax[c * 3], v.X);
+-                ChunkMin[c * 3 + 1] = Math.Min(ChunkMin[c * 3 + 1], v.Y); ChunkMax[c * 3 + 1] = Math.Max(ChunkMax[c * 3 + 1], v.Y);
+-                ChunkMin[c * 3 + 2] = Math.Min(ChunkMin[c * 3 + 2], v.Z); ChunkMax[c * 3 + 2] = Math.Max(ChunkMax[c * 3 + 2], v.Z);
+-                if ((v.Light & LightRecord) != 0)
+-                {
+-                    uint l = v.Light;
+-                    _chunkRecords[c] |= 1ul << (int)(l & 63u);
+-                    if ((l & 1u << 26) != 0) _chunkRecords[c] |= 1ul << (int)(l >> 8 & 63u);
+-                    if ((l & 1u << 27) != 0) _chunkRecords[c] |= 1ul << (int)(l >> 14 & 63u);
+-                    if ((l & 1u << 28) != 0) _chunkRecords[c] |= 1ul << (int)(l >> 20 & 63u);
+-                }
+-                else
+-                {
+-                    float q = BlackQuotient(v);
+-                    if (q < ChunkFogQ[c]) { ChunkFogQ[c] = q; ChunkFogOf[c] = v; }
+-                }
+-                if ((v.Flags & FlagSemi) != 0)
+-                {
+-                    ChunkBlendMin[c * 3] = Math.Min(ChunkBlendMin[c * 3], v.X); ChunkBlendMax[c * 3] = Math.Max(ChunkBlendMax[c * 3], v.X);
+-                    ChunkBlendMin[c * 3 + 1] = Math.Min(ChunkBlendMin[c * 3 + 1], v.Y); ChunkBlendMax[c * 3 + 1] = Math.Max(ChunkBlendMax[c * 3 + 1], v.Y);
+-                    ChunkBlendMin[c * 3 + 2] = Math.Min(ChunkBlendMin[c * 3 + 2], v.Z); ChunkBlendMax[c * 3 + 2] = Math.Max(ChunkBlendMax[c * 3 + 2], v.Z);
+-                }
+-            }
++            if (!_chunkDirty[k % Chunks] || ChunkCap[k] == 0) continue;
++            int end = ChunkStart[k] + ChunkCap[k];
++            Array.Clear(_static, _put[k], end - _put[k]);
++            ChunkCount[k] = _count[k];
++            Dirty(ChunkStart[k], ChunkCap[k]);
+         }
+-        int at = 0;
+-        for (int k = 0; k < 5 * Chunks; k++) { ChunkStart[k] = at; at += ChunkCount[k]; }
+-        var put = new int[5 * Chunks];
+-        Array.Copy(ChunkStart, put, put.Length);
++        SumRanges();
++        for (int c = 0; c < Chunks; c++)
++        {
++            if (!_chunkDirty[c]) continue;
++            _chunkPlainQ[c] = ChunkFogQ[c];
++            _chunkPlainOf[c] = ChunkFogOf[c];
++        }
++        RecordFog();
++        // A long run of patches is uploaded whole once rather than slot by slot.
++        if (_dirty.Count > MostDirty)
++        {
++            _dirty.Clear();
++            StaticGeneration++;
++            _dirtyBase = StaticRevision;
++        }
++        return true;
++    }
++
++    /// <summary>The corner ranges of <see cref="Static"/> rewritten after
++    /// <paramref name="revision"/>, into <paramref name="into"/>; false when that
++    /// revision is of an earlier layout, and the map has to be taken whole.</summary>
++    public static bool DirtySince(int revision, List<(int Start, int Count)> into)
++    {
++        into.Clear();
++        if (revision < _dirtyBase) return false;
++        foreach (var d in _dirty) if (d.Revision > revision) into.Add((d.Start, d.Count));
++        return true;
++    }
++
++    /// <summary>The static map compared with a whole layout of <paramref name="tris"/>:
++    /// every slot's corners in order and every chunk's bounds and fog. Null when they
++    /// agree, else what differs. For a patch's check.</summary>
++    public static string? VerifyStatic(ReadOnlySpan<Vertex> tris)
++    {
++        var start = (int[])ChunkStart.Clone(); var count = (int[])ChunkCount.Clone(); var cap = (int[])ChunkCap.Clone();
++        var min = (float[])ChunkMin.Clone(); var max = (float[])ChunkMax.Clone();
++        var bmin = (float[])ChunkBlendMin.Clone(); var bmax = (float[])ChunkBlendMax.Clone();
++        var used = (bool[])ChunkUsed.Clone(); var fog = (float[])ChunkFogQ.Clone(); var recs = (ulong[])_chunkRecords.Clone();
++        var range = (int[])StaticCount.Clone();
++        var mine = _static.AsSpan(0, _staticCount).ToArray();
++        int gen = StaticGeneration, rev = StaticRevision, baseRev = _dirtyBase;
++        var dirty = _dirty.ToArray();
++        SetStatic(tris);
++        var sb = new System.Text.StringBuilder();
++        int slots = 0;
++        for (int k = 0; k < 5 * Chunks; k++)
++        {
++            bool same = count[k] == ChunkCount[k];
++            for (int i = 0; same && i < count[k]; i++)
++                same = MemoryMarshal.AsBytes(new ReadOnlySpan<Vertex>(in mine[start[k] + i]))
++                           .SequenceEqual(MemoryMarshal.AsBytes(new ReadOnlySpan<Vertex>(in _static[ChunkStart[k] + i])));
++            for (int i = start[k] + count[k]; same && i < start[k] + cap[k]; i++) same = IsPad(mine[i]);
++            if (!same && ++slots <= 4) sb.Append($" slot {k / Chunks}:{k % Chunks} ({count[k]} vs {ChunkCount[k]})");
++        }
++        if (slots > 4) sb.Append($" and {slots - 4} more slot(s)");
++        for (int c = 0; c < Chunks; c++)
++        {
++            bool same = used[c] == ChunkUsed[c] && fog[c] == ChunkFogQ[c] && recs[c] == _chunkRecords[c];
++            for (int a = 0; same && a < 3; a++)
++                same = min[c * 3 + a] == ChunkMin[c * 3 + a] && max[c * 3 + a] == ChunkMax[c * 3 + a]
++                       && bmin[c * 3 + a] == ChunkBlendMin[c * 3 + a] && bmax[c * 3 + a] == ChunkBlendMax[c * 3 + a];
++            if (!same) sb.Append($" chunk {c} bounds or fog");
++        }
++        for (int r = 0; r < 5; r++) if (range[r] != StaticCount[r]) sb.Append($" range {r} {range[r]} vs {StaticCount[r]}");
++        // Put the patched layout back, so what the backend has is still a revision of it.
++        Array.Copy(start, ChunkStart, start.Length); Array.Copy(count, ChunkCount, count.Length); Array.Copy(cap, ChunkCap, cap.Length);
++        Array.Copy(min, ChunkMin, min.Length); Array.Copy(max, ChunkMax, max.Length);
++        Array.Copy(bmin, ChunkBlendMin, bmin.Length); Array.Copy(bmax, ChunkBlendMax, bmax.Length);
++        Array.Copy(used, ChunkUsed, used.Length); Array.Copy(recs, _chunkRecords, recs.Length);
++        Array.Copy(range, StaticCount, range.Length);
++        for (int r = 0; r < 5; r++) StaticStart[r] = ChunkStart[r * Chunks];
++        if (_static.Length < mine.Length) _static = new Vertex[mine.Length];
++        mine.CopyTo(_static, 0);
++        _staticCount = mine.Length;
++        Array.Copy(fog, ChunkFogQ, Chunks);
++        StaticGeneration = gen; StaticRevision = rev; _dirtyBase = baseRev;
++        _dirty.Clear(); _dirty.AddRange(dirty);
++        return sb.Length == 0 ? null : sb.ToString().Trim();
++    }
++
++    /// <summary>Each triangle's slot into <see cref="_keys"/>, and each slot's corners
++    /// into <see cref="_count"/>.</summary>
++    static void Count(ReadOnlySpan<Vertex> tris, int n)
++    {
++        if (_keys.Length < n / 3) _keys = new int[n / 3 * 2];
++        Array.Clear(_count);
+         for (int i = 0, t = 0; i < n; i += 3, t++)
+         {
+-            int k = key[t];
+-            _static[put[k]] = tris[i]; _static[put[k] + 1] = tris[i + 1]; _static[put[k] + 2] = tris[i + 2];
+-            put[k] += 3;
++            int k = Range(tris[i].Flags) * Chunks + ChunkOf(tris[i], tris[i + 1], tris[i + 2]);
++            _keys[t] = k;
++            _count[k] += 3;
++        }
++    }
++
++    static void ResetChunk(int c)
++    {
++        ChunkUsed[c] = false;
++        _chunkRecords[c] = 0;
++        ChunkFogQ[c] = float.MaxValue;
++        ChunkMin[c * 3] = ChunkMin[c * 3 + 1] = ChunkMin[c * 3 + 2] = float.MaxValue;
++        ChunkMax[c * 3] = ChunkMax[c * 3 + 1] = ChunkMax[c * 3 + 2] = float.MinValue;
++        ChunkBlendMin[c * 3] = ChunkBlendMin[c * 3 + 1] = ChunkBlendMin[c * 3 + 2] = float.MaxValue;
++        ChunkBlendMax[c * 3] = ChunkBlendMax[c * 3 + 1] = ChunkBlendMax[c * 3 + 2] = float.MinValue;
++    }
++
++    /// <summary>A triangle into its slot at <see cref="_put"/>, and into its chunk's
++    /// bounds, records and fog.</summary>
++    static void Place(ReadOnlySpan<Vertex> tris, int i, int k)
++    {
++        int c = k % Chunks;
++        ChunkUsed[c] = true;
++        for (int j = 0; j < 3; j++)
++        {
++            ref readonly var v = ref tris[i + j];
++            _static[_put[k] + j] = v;
++            ChunkMin[c * 3] = Math.Min(ChunkMin[c * 3], v.X); ChunkMax[c * 3] = Math.Max(ChunkMax[c * 3], v.X);
++            ChunkMin[c * 3 + 1] = Math.Min(ChunkMin[c * 3 + 1], v.Y); ChunkMax[c * 3 + 1] = Math.Max(ChunkMax[c * 3 + 1], v.Y);
++            ChunkMin[c * 3 + 2] = Math.Min(ChunkMin[c * 3 + 2], v.Z); ChunkMax[c * 3 + 2] = Math.Max(ChunkMax[c * 3 + 2], v.Z);
++            if ((v.Light & LightRecord) != 0)
++            {
++                uint l = v.Light;
++                _chunkRecords[c] |= 1ul << (int)(l & 63u);
++                if ((l & 1u << 26) != 0) _chunkRecords[c] |= 1ul << (int)(l >> 8 & 63u);
++                if ((l & 1u << 27) != 0) _chunkRecords[c] |= 1ul << (int)(l >> 14 & 63u);
++                if ((l & 1u << 28) != 0) _chunkRecords[c] |= 1ul << (int)(l >> 20 & 63u);
++            }
++            else
++            {
++                float q = BlackQuotient(v);
++                if (q < ChunkFogQ[c]) { ChunkFogQ[c] = q; ChunkFogOf[c] = v; }
++            }
++            if ((v.Flags & FlagSemi) != 0)
++            {
++                ChunkBlendMin[c * 3] = Math.Min(ChunkBlendMin[c * 3], v.X); ChunkBlendMax[c * 3] = Math.Max(ChunkBlendMax[c * 3], v.X);
++                ChunkBlendMin[c * 3 + 1] = Math.Min(ChunkBlendMin[c * 3 + 1], v.Y); ChunkBlendMax[c * 3 + 1] = Math.Max(ChunkBlendMax[c * 3 + 1], v.Y);
++                ChunkBlendMin[c * 3 + 2] = Math.Min(ChunkBlendMin[c * 3 + 2], v.Z); ChunkBlendMax[c * 3 + 2] = Math.Max(ChunkBlendMax[c * 3 + 2], v.Z);
++            }
+         }
++        _put[k] += 3;
++    }
++
++    static void SumRanges()
++    {
+         for (int r = 0; r < 5; r++)
+         {
+-            StaticStart[r] = ChunkStart[r * Chunks];
+             int sum = 0;
+             for (int c = 0; c < Chunks; c++) sum += ChunkCount[r * Chunks + c];
+             StaticCount[r] = sum;
+         }
+-        _staticCount = n;
+-        Array.Copy(ChunkFogQ, _chunkPlainQ, Chunks);
+-        Array.Copy(ChunkFogOf, _chunkPlainOf, Chunks);
+-        RecordFog();
+-        StaticGeneration++;
++    }
++
++    /// <summary>A rewritten range, joined to the last when they meet.</summary>
++    static void Dirty(int start, int count)
++    {
++        if (_dirty.Count > 0)
++        {
++            var last = _dirty[^1];
++            if (last.Revision == StaticRevision && last.Start + last.Count == start)
++            { _dirty[^1] = (last.Revision, last.Start, last.Count + count); return; }
++        }
++        _dirty.Add((StaticRevision, start, count));
+     }
+ 
+     /// <summary>The quotient H*65536/z at and below which a corner's depth cue

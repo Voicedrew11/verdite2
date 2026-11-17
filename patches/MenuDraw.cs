@@ -115,6 +115,48 @@ public static class MenuDraw
 
     const int LabelSlot = 10;
 
+    /// <summary>
+    /// One textured quad of the menu's kind, anywhere: a <paramref name="w"/> x
+    /// <paramref name="h"/> rectangle at (x, y) showing the (u, v, uw, vh) part of
+    /// <paramref name="template"/>'s page, painted <paramref name="grey"/>, semi-transparent
+    /// if asked, on ordering-table slot <paramref name="slot"/>. For drawing the menu's
+    /// pieces at sizes of the port's own (the Shortcuts HUD's boxes and small letters).
+    /// </summary>
+    public static void Quad(IMemory m, uint template, int x, int y, int w, int h,
+                            int u, int v, int uw, int vh, byte grey, bool semi, int slot)
+    {
+        uint p = NewQuad(m);
+        m.WriteU8(p + 4, grey);
+        m.WriteU8(p + 5, grey);
+        m.WriteU8(p + 6, grey);
+        if (semi) m.WriteU8(p + 7, (byte)(m.ReadU8(p + 7) | 0x02));
+
+        m.WriteU16(p + 0x08, (ushort)x);
+        m.WriteU16(p + 0x0A, (ushort)y);
+        m.WriteU16(p + 0x10, (ushort)(x + w));
+        m.WriteU16(p + 0x12, (ushort)y);
+        m.WriteU16(p + 0x18, (ushort)x);
+        m.WriteU16(p + 0x1A, (ushort)(y + h));
+        m.WriteU16(p + 0x20, (ushort)(x + w));
+        m.WriteU16(p + 0x22, (ushort)(y + h));
+
+        m.WriteU16(p + 0x16, m.ReadU16(template));
+        m.WriteU16(p + 0x0E, m.ReadU16(template + 2));
+
+        m.WriteU8(p + 0x0C, (byte)Math.Min(u, 255));
+        m.WriteU8(p + 0x0D, (byte)Math.Min(v, 255));
+        m.WriteU8(p + 0x14, (byte)Math.Min(u + uw, 255));
+        m.WriteU8(p + 0x15, (byte)Math.Min(v, 255));
+        m.WriteU8(p + 0x1C, (byte)Math.Min(u, 255));
+        m.WriteU8(p + 0x1D, (byte)Math.Min(v + vh, 255));
+        m.WriteU8(p + 0x24, (byte)Math.Min(u + uw, 255));
+        m.WriteU8(p + 0x25, (byte)Math.Min(v + vh, 255));
+
+        Link(m, p, slot);
+    }
+
+    public const int QuadBytes = QuadSize;
+
     // func_80022B20. Returns the widened digit buffer (no 0xFF terminator).
     public static byte[] FormatNumber(int value, int width, bool zeroPad = false, int mode = 0)
     {

@@ -1,0 +1,51 @@
+diff --git a/RecompOne.Runtime/sdk/LibCd.cs b/RecompOne.Runtime/sdk/LibCd.cs
+index 482629a..be5fb3c 100644
+--- a/RecompOne.Runtime/sdk/LibCd.cs
++++ b/RecompOne.Runtime/sdk/LibCd.cs
+@@ -423,6 +427,7 @@ public static class LibCd
+                     var lba = CurrentLba;
+                     _int1Lba = lba;
+                     FifoReload(lba);
++                    var setlocs = _setlocCount;
+                     if (_cbReady != 0)
+                     {
+                         c.A0 = DataReady;
+@@ -430,7 +435,7 @@ public static class LibCd
+                         Dispatcher.Call(c, m, _cbReady);
+                     }
+ 
+-                    AdvancePos(1);
++                    if (setlocs == _setlocCount) AdvancePos(1);
+                     Dispatcher.LoadByLba(CurrentLba);
+                     if (_cbData != 0)
+                     {
+@@ -689,8 +694,9 @@ public static class LibCd
+                 _cdDataPending = false;
+                 c.A0 = DataReady;
+                 c.A1 = PublishStatus(m);
++                var setlocs = _setlocCount;
+                 Dispatcher.Call(c, m, _cbReady);
+-                AdvancePos(1);
++                if (setlocs == _setlocCount) AdvancePos(1);
+                 Dispatcher.LoadByLba(CurrentLba);
+                 if (!_cdDataPending) break;
+             }
+@@ -878,6 +884,10 @@ public static class LibCd
+     }
+ 
+     private static int _int1Lba = -1;
++
++    //0119. A sector callback that issues a seek has moved the head; stepping past
++    //the sector it was handed would start the new read one sector late.
++    private static int _setlocCount;
+     private static int _fifoLba = -1;
+     private static int _fifoOff;
+ 
+@@ -1206,6 +1216,7 @@ public static class LibCd
+                         for (var i = 0; i < 4; i++) _pos[i] = m.ReadU8(param + (uint)i);
+                     }
+ 
++                _setlocCount++;
+                 _readActive = false;
+                 lock (_dataIrqQueue)
+                 {

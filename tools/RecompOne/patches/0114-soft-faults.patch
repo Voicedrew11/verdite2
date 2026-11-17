@@ -1,0 +1,104 @@
+diff --git a/RecompOne.Runtime/Memory/PSMemory.cs b/RecompOne.Runtime/Memory/PSMemory.cs
+index 88b4a82..18f5f7f 100644
+--- a/RecompOne.Runtime/Memory/PSMemory.cs
++++ b/RecompOne.Runtime/Memory/PSMemory.cs
+@@ -163,7 +163,25 @@ public sealed class PSMemory : IMemory
+             Runtime.RamLog.RecordRead(phys & _ramMask, size);
+     }
+ 
+-    private Span<byte> Resolve(uint address, int size)
++    //0114. A fuzzer finds more when a bad pointer is a report and not the end of the run.
++    /// <summary>Under a fuzzer: an unmapped access is reported to <see cref="UnmappedAccess"/>
++    /// and reads zeros / drops the write instead of throwing. Off by default.</summary>
++    public static bool SoftFaults;
++    /// <summary>(address, size, write) for each soft fault.</summary>
++    public static Action<uint, int, bool>? UnmappedAccess;
++
++    [ThreadStatic] private static byte[]? _junk;
++
++    // A soft fault's span: a per-thread scratch buffer, cleared so a read sees zeros.
++    private static Span<byte> SoftFault(uint address, int size, bool write)
++    {
++        UnmappedAccess?.Invoke(address, size, write);
++        var junk = (_junk ??= new byte[8]).AsSpan(0, size);
++        junk.Clear();
++        return junk;
++    }
++
++    private Span<byte> Resolve(uint address, int size, bool write)
+     {
+         var phys = MemoryMap.ToPhysical(address);
+ 
+@@ -174,7 +192,10 @@ public sealed class PSMemory : IMemory
+         {
+             var off = (int)(phys - MemoryMap.ScratchpadBase);
+             if (off + size > MemoryMap.ScratchpadWindow)
++            {
++                if (SoftFaults) return SoftFault(address, size, write);
+                 throw new InvalidOperationException($"access crossing the end of the scratchpad: 0x{address:X8}");
++            }
+             return _scratchpad.AsSpan(off, size);
+         }
+ 
+@@ -184,6 +205,7 @@ public sealed class PSMemory : IMemory
+         if (phys >= MemoryMap.BiosBase && phys < MemoryMap.BiosBase + MemoryMap.BiosSize)
+             return _bios.AsSpan((int)(phys - MemoryMap.BiosBase), size);
+ 
++        if (SoftFaults) return SoftFault(address, size, write);
+         throw new InvalidOperationException($"unmapped address: 0x{address:X8}");
+     }
+ 
+@@ -371,7 +393,7 @@ public sealed class PSMemory : IMemory
+         TrackRead(phys, 1);
+         if (_cd != null && IsCd(phys)) return _cd.Read(phys);
+         if (Sio0.InRange(phys)) return (byte)_sio.Read(phys);
+-        return Resolve(address, 1)[0];
++        return Resolve(address, 1, false)[0];
+     }
+ 
+     private ushort ReadU16Slow(uint address)
+@@ -390,7 +412,7 @@ public sealed class PSMemory : IMemory
+         if (phys == 0x1F801070u) return (ushort)Interrupts.ReadStat();
+         if (phys == 0x1F801074u) return (ushort)Interrupts.ReadMask();
+         if (Timers.InRange(phys) && _timers.TryRead(phys, out var tv)) return (ushort)tv;
+-        var s = Resolve(address, 2);
++        var s = Resolve(address, 2, false);
+         return (ushort)(s[0] | (s[1] << 8));
+     }
+ 
+@@ -416,7 +438,7 @@ public sealed class PSMemory : IMemory
+         if (_cd != null && IsCd(phys)) return _cd.Read(phys);
+         if (IsSpu(phys)) return (uint)(_spu.ReadReg16(phys) | (_spu.ReadReg16(phys + 2) << 16));
+         if (Timers.InRange(phys) && _timers.TryRead(phys, out var tv)) return tv;
+-        var s = Resolve(address, 4);
++        var s = Resolve(address, 4, false);
+         uint word = (uint)(s[0] | (s[1] << 8) | (s[2] << 16) | (s[3] << 24));
+         // A word carrying a projected screen coordinate is offered to whichever store
+         // copies it next, which is how a vertex's depth follows the game's lw/sw out
+@@ -452,7 +474,7 @@ public sealed class PSMemory : IMemory
+         }
+ 
+         if (_frozenCount > 0 && phys < MemoryMap.RamWindow && _frozen[phys & _ramMask]) return;
+-        Resolve(address, 1)[0] = value;
++        Resolve(address, 1, true)[0] = value;
+     }
+ 
+     private void WriteU16Slow(uint address, ushort value)
+@@ -498,7 +520,7 @@ public sealed class PSMemory : IMemory
+         }
+ 
+         if (_timers.TryWrite(phys, value)) return;
+-        var s = Resolve(address, 2);
++        var s = Resolve(address, 2, true);
+ 
+         if (_frozenCount > 0 && phys < MemoryMap.RamWindow)
+         {
+@@ -593,7 +615,7 @@ public sealed class PSMemory : IMemory
+         }
+ 
+         if (_timers.TryWrite(phys, value)) return;
+-        var s = Resolve(address, 4);
++        var s = Resolve(address, 4, true);
+         // The other half of the association: a store carrying a value the GTE (or an
+         // earlier load) published binds the destination address to that vertex, and a
+         // store carrying anything else drops whatever the destination used to mean.

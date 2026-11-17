@@ -264,8 +264,10 @@ public sealed partial class Gpu
 
         if (HleOn)
         {
+            _primOpacity = PacketOpacity.Any ? PacketOpacity.Take(_fifoSrc[0], _fifo[0], _fifo[vwAt[0]]) : (byte)0;
             HleTri(v[0], v[1], v[2], tex, gouraud, semi, raw, clut);
             if (quad) HleTri(v[1], v[2], v[3], tex, gouraud, semi, raw, clut);
+            _primOpacity = 0;
         }
         else if (!NoRaster)
         {
@@ -274,7 +276,7 @@ public sealed partial class Gpu
         }
     }
 
-    //0111. A run nobody watches can leave the software rasterizer's pixels
+    //0112. A run nobody watches can leave the software rasterizer's pixels
     //unmade: everything up to them (the packet, the vertex map, the prim event)
     //still happens, so the game sees the same GPU. Half a headless frame was here.
     public static bool NoRaster;

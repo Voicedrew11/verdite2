@@ -59,11 +59,15 @@ public static class WaterSwell
     static long _halves, _moved, _pinned;
     static double _buildMs;
 
-    public static void Forget() { _hash = 0; _ready = false; }
+    public static void Forget() { _hash = 0; _ready = false; FreeHash = 0; }
 
-    /// <summary>Bumped by every build: the retained map carries which of its corners
-    /// are free (0085), so a new set is a rebuild there.</summary>
+    /// <summary>Bumped by every build.</summary>
     public static int Generation { get; private set; }
+
+    /// <summary>The set of free positions as one value, 0 for none: the retained map
+    /// carries which of its corners are free (0085), so a new set is a rebuild there,
+    /// and a swell rebuilt to the same set (a door far from the water) is not.</summary>
+    public static ulong FreeHash { get; private set; }
 
     /// <summary>Whether a world position is one the swell moves.</summary>
     public static bool IsFree(float x, float y, float z)
@@ -135,10 +139,12 @@ public static class WaterSwell
         for (int i = 0; i < WaterWaves.RectN * 4; i++) Mix((uint)(int)WaterWaves.Rects[i]);
         var ram = mem.Ram;
         int at = (int)(MapBase & (uint)(ram.Length - 1));
+        // A half that draws nothing is one value: the game writes footprints into
+        // empty halves' turn bits as play goes on (RetainedMap.HalfKey).
         for (int i = 0; i < 6400; i++, at += 10)
         {
-            Mix((uint)(ram[at] | ram[at + 1] << 8 | (ram[at + 2] & 3) << 16));
-            Mix((uint)(ram[at + 5] | ram[at + 6] << 8 | (ram[at + 7] & 3) << 16));
+            Mix(RetainedMap.HalfKey(ram.Slice(at, 5)) & 0x3FFFFu);
+            Mix(RetainedMap.HalfKey(ram.Slice(at + 5, 5)) & 0x3FFFFu);
         }
         return h;
     }
@@ -147,6 +153,7 @@ public static class WaterSwell
     {
         _meshes.Clear();
         _free.Clear();
+        FreeHash = 0;
         Generation++;
         Array.Fill(_rest, float.NaN);
         _ready = false;
@@ -207,6 +214,10 @@ public static class WaterSwell
         _rimPositions = rim.Count;
         _sharedPositions = shared.Count;
         _ready = true;
+        // Order-free: the sum of each position's own mix.
+        ulong free = 0;
+        foreach (long k in _free) free += ((ulong)k ^ 0x9E3779B97F4A7C15ul) * 0xBF58476D1CE4E5B9ul;
+        FreeHash = free | 1ul;
     }
 
     /// <summary>A mesh's faces sorted into water and not, once per model per build.</summary>

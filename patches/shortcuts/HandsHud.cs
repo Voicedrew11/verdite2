@@ -1,0 +1,212 @@
+using RecompOne.Runtime.Context;
+using RecompOne.Runtime.Memory;
+
+namespace Kf2.Shortcuts;
+
+/// <summary>
+/// The hands and the current hotkey, bottom left, as three cards in a Souls cross: the
+/// left the magic hand, the right the weapon hand, the one between them and lower the
+/// hotkey Square uses. Each card is the HP panel's own frame (<see cref="CardFrame"/>)
+/// round the item's model (<see cref="HandsIcons"/>; a spell shows its element's
+/// crystal and its level as a Roman numeral); an item hotkey its count in the bottom
+/// right. No button labels: the cross's places say which hand is which.
+///
+/// Laid out in the game's pixels to work at 240p: the cards are 28 x 42, a pixel apart,
+/// as wide together as the HP panel, their bevel BevelLess pixels a side narrower than the
+/// panel's for room inside; their digits and numerals are the number font at
+/// their own size. The margins are the panel's: its left edge, and its distance from the
+/// top as the distance from the bottom. They follow the panel to the screen's edge when
+/// the HUD is anchored (<see cref="Widescreen.AnchoredHudX"/>).
+///
+/// Drawn after the HUD builder (func_80031D5C, which stage 13 and MenuWorld's passes both
+/// call), only when the builder drew the HP panel: record 1's drawn byte, not the options
+/// screen's toggle at 0x801994DD it is copied from. Before a menu, a shop or a talk the
+/// game draws one frame with the toggle zeroed (func_80029C50), which leaves the records
+/// hidden, and MenuWorld's passes draw from the records as they stand. The frames and
+/// models at the panel's and its contents' depths, the digits on ordering-table slot 1
+/// where the game's own 2D HUD sprites go.
+///
+/// Game thread.
+/// </summary>
+static class HandsHud
+{
+    const uint PanelDrawn = Stage13.HudRecords + Stage13.HudStride;   // record 1's +0: u8 1 while the HP panel draws
+    const uint ContentDepth = PanelDrawn + 0x14;                      // record 1's Z: the panel's letters and digits
+    const uint Descriptor = MenuDraw.ActiveDescriptor;
+    const uint NumberTemplate = MenuDraw.NumberTemplate;
+    const int Slot = 1;
+    const byte TextGrey = 0x80;
+    const int Room = 64 * MenuDraw.QuadBytes;                         // ours, the models' and the frames'
+    const int ScreenHeight = 240;
+
+    // The cross, in the game's pixels.
+    const int CardWidth = 28, CardHeight = 42, Gap = 1;
+    const int BevelLess = 3;                                          // the panel's bevel, this much narrower a side
+    const int Drop = 14;                                              // the hotkey's card, below the hands'
+
+    /// <summary>The icon slots of <see cref="HandsIcons"/>.</summary>
+    const int WeaponIcon = 0, HotkeyIcon = 1, MagicIcon = 2;
+
+    /// <summary>Called from player control's pre-hook: reads the models the cards will
+    /// want, so the draw never touches the disc. A spell's model is its crystal.</summary>
+    internal static void Prepare(CpuContext c, IMemory m, bool probe)
+    {
+        HandsIcons.Want(c, m, WeaponIcon, m.ReadU8(Hands.Weapon), probe);
+        HandsIcons.Want(c, m, MagicIcon, SpellCrystals.Crystal(m.ReadU8(Hands.AttackSpell)), probe);
+        var (spell, item) = Labels.Held(m, Shortcuts.Hotkey);
+        HandsIcons.Want(c, m, HotkeyIcon, spell != Shortcuts.None ? SpellCrystals.Crystal(spell) : item, probe);
+        Notice(m);
+    }
+
+    /// <summary>What each card shows, for <see cref="CrossFeedback"/>'s pulse: the id and
+    /// the level or count drawn on it, and for the hotkey which one is current.</summary>
+    static void Notice(IMemory m)
+    {
+        byte weapon = m.ReadU8(Hands.Weapon), spell = m.ReadU8(Hands.AttackSpell);
+        var (hSpell, hItem) = Labels.Held(m, Shortcuts.Hotkey);
+        ulong spellLevel = spell != Shortcuts.None ? (ulong)SpellCrystals.Level(m, spell) : 0;
+        ulong hotkeyLevel = hSpell != Shortcuts.None ? (ulong)SpellCrystals.Level(m, hSpell) : 0;
+        ulong count = hItem != Shortcuts.None ? (ulong)m.ReadU8(Hands.Inventory + hItem) : 0;
+        CrossFeedback.Notice(CrossFeedback.Card.Weapon, weapon);
+        CrossFeedback.Notice(CrossFeedback.Card.Magic, spell | spellLevel << 8);
+        CrossFeedback.Notice(CrossFeedback.Card.Hotkey,
+            (ulong)Shortcuts.Hotkey | (ulong)hSpell << 8 | (ulong)hItem << 16 | hotkeyLevel << 24 | count << 32);
+    }
+
+    /// <summary>The cross, in the HUD builder's post-hook. Drawn as the HUD is drawn:
+    /// with <see cref="PolyAssembler.InHud"/> held, which per-pixel lighting and the
+    /// packet depth raise only inside the builder, so the lit assembler leaves the
+    /// cards and models their own colours and no depth, whichever order the posts run in.</summary>
+    internal static void Draw(CpuContext c, IMemory m)
+    {
+        if (m.ReadU8(PanelDrawn) != 1) return;
+        bool wasInHud = PolyAssembler.InHud;
+        PolyAssembler.InHud = true;
+        try { DrawCross(c, m); }
+        finally { PolyAssembler.InHud = wasInHud; }
+    }
+
+    static void DrawCross(CpuContext c, IMemory m)
+    {
+        uint d = m.ReadU32(Descriptor);
+        if (!HasRoom(m, d)) return;
+        CrossFeedback.BeginFrame();
+        CrossFeedback.ForgetOpacities();
+
+        uint panel = Stage13.HudRecords + CardFrame.PanelRecord * Stage13.HudStride;
+        int left = Widescreen.AnchoredHudX(Widescreen.NativeHudX(m, CardFrame.PanelRecord));
+        int bottom = ScreenHeight - (short)m.ReadU16(panel + 0x12);
+        int handsY = bottom - Drop - CardHeight, hotkeyY = bottom - CardHeight;
+        int magicX = left, hotkeyX = left + CardWidth + Gap, weaponX = left + 2 * (CardWidth + Gap);
+
+        byte weapon = m.ReadU8(Hands.Weapon), spell = m.ReadU8(Hands.AttackSpell);
+        var (hSpell, hItem) = Labels.Held(m, Shortcuts.Hotkey);
+        var magic = CrossFeedback.LookOf(CrossFeedback.Card.Magic);
+        var hotkey = CrossFeedback.LookOf(CrossFeedback.Card.Hotkey);
+        var hand = CrossFeedback.LookOf(CrossFeedback.Card.Weapon);
+
+        // The frames first: the lit assembler links them at the panel's depth, behind
+        // the models at its contents' depth.
+        Frame(c, m, d, magicX, handsY, CrossFeedback.FrameLookOf(CrossFeedback.Card.Magic));
+        Frame(c, m, d, hotkeyX, hotkeyY, CrossFeedback.FrameLookOf(CrossFeedback.Card.Hotkey));
+        Frame(c, m, d, weaponX, handsY, CrossFeedback.FrameLookOf(CrossFeedback.Card.Weapon));
+        if (!HasRoom(m, d)) return;
+
+        int z = (short)m.ReadU16(ContentDepth);
+        if (spell != Shortcuts.None) Icon(c, m, d, MagicIcon, SpellCrystals.Crystal(spell), magicX, handsY, z, magic);
+        if (weapon != Shortcuts.None) Icon(c, m, d, WeaponIcon, weapon, weaponX, handsY, z, hand);
+        if (hSpell != Shortcuts.None) Icon(c, m, d, HotkeyIcon, SpellCrystals.Crystal(hSpell), hotkeyX, hotkeyY, z, hotkey);
+        else if (hItem != Shortcuts.None) Icon(c, m, d, HotkeyIcon, hItem, hotkeyX, hotkeyY, z, hotkey);
+        if (!HasRoom(m, d)) return;
+
+        uint from = Cursor(m, d);
+        if (spell != Shortcuts.None) Numeral(m, magicX, handsY, SpellCrystals.Level(m, spell));
+        CrossFeedback.Tint(m, from, Cursor(m, d), magic);
+        from = Cursor(m, d);
+        if (hSpell != Shortcuts.None) Numeral(m, hotkeyX, hotkeyY, SpellCrystals.Level(m, hSpell));
+        else if (hItem != Shortcuts.None) Count(m, hotkeyX, hotkeyY, m.ReadU8(Hands.Inventory + hItem));
+        CrossFeedback.Tint(m, from, Cursor(m, d), hotkey);
+    }
+
+    /// <summary>Where the frame's buffer has got to: the next packet goes here.</summary>
+    static uint Cursor(IMemory m, uint d) => m.ReadU32(d + 8);
+
+    /// <summary>Room left in the frame's primitive buffer for everything the cross adds;
+    /// also brings the menu's mirror of the cursor up to the frame's, which the model
+    /// assembler moves alone.</summary>
+    static bool HasRoom(IMemory m, uint d)
+    {
+        uint at = m.ReadU32(d + 8), end = m.ReadU32(d + 4);
+        if (at == 0 || end <= at || end - at < Room) return false;
+        m.WriteU32(MenuDraw.Cursor, at);
+        return true;
+    }
+
+    /// <summary>A card's frame, a pixel larger a side while <paramref name="look"/> grows it.</summary>
+    static void Frame(CpuContext c, IMemory m, uint d, int x, int y, CrossFeedback.Look look)
+    {
+        if (!HasRoom(m, d)) return;
+        uint from = Cursor(m, d);
+        int g = look.Grow;
+        CardFrame.Draw(c, m, x - g, y - g, CardWidth + 2 * g, CardHeight + 2 * g, BevelLess);
+        CrossFeedback.Tint(m, from, Cursor(m, d), look);
+    }
+
+    /// <summary>The inside of a card at (x, y): the frame less its bevel.</summary>
+    static (int X, int Y, int W, int H) Inside(int x, int y)
+    {
+        var (bx, by) = CardFrame.Bevel;
+        return (x + bx, y + by, CardWidth - 2 * bx, CardHeight - 2 * by);
+    }
+
+    /// <summary>The model of <paramref name="item"/> posed large in the inside and cropped
+    /// by it; nothing until the model has been read.</summary>
+    static void Icon(CpuContext c, IMemory m, uint d, int slot, byte item, int x, int y, int z, CrossFeedback.Look look)
+    {
+        if (!HandsIcons.Ready(slot, item) || !HasRoom(m, d)) return;
+        uint from = Cursor(m, d);
+        var (ix, iy, iw, ih) = Inside(x, y);
+        HandsIcons.Draw(c, m, slot, ix, iy, iw, ih, z);
+        CrossFeedback.Tint(m, from, Cursor(m, d), look);
+    }
+
+    /// <summary>A count, right-aligned in the inside's bottom right corner.</summary>
+    static void Count(IMemory m, int x, int y, int count)
+    {
+        var (ix, iy, iw, ih) = Inside(x, y);
+        var digits = MenuDraw.FormatNumber(Math.Min(count, 99), count > 9 ? 2 : 1);
+        int w = DigitWidth(m), h = (short)m.ReadU16(NumberTemplate + 0xA);
+        int at = ix + iw - digits.Length * w;
+        for (int i = 0; i < digits.Length; i++) Digit(m, at + i * w, iy + ih - h, digits[i]);
+    }
+
+    /// <summary>A spell's level as a Roman numeral in the inside's bottom left corner, in
+    /// the number font the counts and the HP panel use: its 1 is a serifed I, and V and X
+    /// are among its signs (the game spells LV and EXP with them).</summary>
+    static void Numeral(IMemory m, int x, int y, int level)
+    {
+        var (ix, iy, _, ih) = Inside(x, y);
+        int h = (short)m.ReadU16(NumberTemplate + 0xA);
+        foreach (char ch in SpellCrystals.Roman(level))
+        {
+            Digit(m, ix, iy + ih - h, ch switch { 'I' => One, 'V' => SignV, _ => SignX });
+            ix += ch == 'I' ? NarrowAdvance : DigitWidth(m);
+        }
+    }
+
+    const byte One = 1, SignV = 17, SignX = 18;              // the number strip's cells
+    const int NarrowAdvance = 5;                             // an I, narrower than its 7-pixel cell
+
+    static int DigitWidth(IMemory m) => (short)m.ReadU16(NumberTemplate + 8);
+
+    /// <summary>One digit of the menu's number font (its template's strip), at its own size.</summary>
+    static void Digit(IMemory m, int x, int y, byte d)
+    {
+        int w = DigitWidth(m), h = (short)m.ReadU16(NumberTemplate + 0xA);
+        int u = m.ReadU8(NumberTemplate + 4), uw = m.ReadU8(NumberTemplate + 8), vh = m.ReadU8(NumberTemplate + 0xA);
+        int v;
+        if (d < 11) v = d * 15;
+        else { u += 7; v = (d - 11) * 15; }
+        MenuDraw.Quad(m, NumberTemplate, x, y, w, h, u, v, uw, vh, TextGrey, false, Slot);
+    }
+}

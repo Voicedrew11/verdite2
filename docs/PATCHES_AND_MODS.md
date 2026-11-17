@@ -3907,7 +3907,8 @@ change: the weapon's id at `0x801994AF` and seven armour ids at
 candidate's id (its `A3`; `0xFF` is "take it off") into its slot byte, runs
 `func_800244CC`, reads the nineteen words, and puts the slot byte and all
 nineteen words back. The real equip calls (`func_80026210`, `func_80025FD0`) are
-never made; the weapon one also loads a model and plays a sound. See "Nineteen of
+never made; the weapon one also loads a model (it plays no sound: see "The cross fades
+when idle, and answers a press"). See "Nineteen of
 those words are a cache, and `func_800244CC` owns all of them" in
 [GAME_INTERNALS.md](GAME_INTERNALS.md).
 
@@ -3987,44 +3988,260 @@ second slot with something equipped. Ships off until it is played.
 
 ## Shortcuts
 
-**Off by default; assigning and loading measured, using not tried.** The game's Select
-shortcut, five times over: any of the five holds an item, an attack spell or a support
-spell, used with one press through the game's own Select code, so MP, the gauge, item
-counts and "use it on what is in front of you" all hold. Shortcut 1 is the game's
-Select itself. Keys 1-5, or Select and the d-pad (Up, Down, Left, Right); a d-pad
-direction given to a shortcut stops walking and turning in the world, not in menus.
-Assigned from Equipment's Select row (HOTKEYS with keyboard labels): pick, answer Yes,
-then a second list asks which shortcut. Gameplay ▸ *Shortcuts*, with the mod's page under
-it (labels, a key and a pad button per shortcut, the d-pad); PORT SETTINGS ▸ CONTROLS ▸
-SHORTCUTS (GAMEPLAY is full at seven rows; the check refuses an eighth at start);
-`kf2.shortcuts.on`, `KF2_SHORTCUTS=0|1`, `KF2_SHORTCUTS_PROBE=1` a line for each
-assignment, shortcut fired and card load. Brought in from the Shortcuts mod
-(`kf2.shortcuts`) of PerdueEgg's verdite2-mods (https://github.com/PerdueEgg/verdite2-mods,
-`mods/shortcuts`, at `12df02b`), 2026-11-11, at the user's request; `patches/shortcuts/`
-(`Shortcuts.cs` the hooks, `Picker.cs` the which-shortcut list, `Labels.cs` the words,
-`CardFiles.cs` the files), entry `Shortcuts`. The logic is the mod's; `Shortcuts.cs`
-carries its reading of the shortcut page, the setters and player control.
+**Off by default; measured headless, not played on a pad, the HUD not judged.** Since
+2026-11-11, Souls-style hands and hotkeys (the user's design): the right hand holds two
+weapons, the left two attack spells, and five hotkeys hold an item or a spell each (the
+game's Select shortcut five times over, which is what the feature was brought in as).
+`patches/shortcuts/`: `Shortcuts.cs` the hooks, the latches and the hotkeys,
+`Hands.cs` the two hands, `PadLayout.cs` the pad, `HandsHud.cs` and `HandsIcons.cs`
+the HUD, `Picker.cs` the which-slot list, `Labels.cs` the words, `CardFiles.cs` the
+files. Gameplay ▸ *Shortcuts* (labels, a key per hotkey and per hand); PORT SETTINGS ▸
+CONTROLS ▸ SHORTCUTS; `kf2.shortcuts.on`, `KF2_SHORTCUTS=0|1`, `KF2_SHORTCUTS_PROBE=1` a
+line for each assignment, swap, hotkey used, icon read and card load; the shell's
+`hands` verb. The hotkey logic came from the Shortcuts mod (`kf2.shortcuts`) of
+PerdueEgg's verdite2-mods (https://github.com/PerdueEgg/verdite2-mods, `mods/shortcuts`,
+at `12df02b`); stands down while that mod is enabled.
 
-- **Words through the game's label routine.** Names are copied cell for cell from the
-  name slots, and the port's own words encoded through the `kf2.text` slot that
-  `Lettering` publishes (or the Text mod, enabled in its place), so the lettering, the
-  Retranslation's names and a `shortcuts:` string-table key apply.
-- **The files are the mod's**: `shortcuts_slotN.txt` beside the cards (the working
-  directory; gitignored for a dev run), written on a card save while it is on or anything
-  is assigned, read on every card load, cleared by a new game or a death without Seath's
-  Tear. A player's shortcuts from the mod carry over, and its keys too.
-- **The settings page reads no guest memory**: what each shortcut holds is copied on the
-  game thread at each control tick, and a Clear goes through the same lock.
-- Stands down while the mod is enabled.
+| pad, in the world | does |
+|---|---|
+| R1 (held) | the game's Square, held: swings the weapon out (a bow draws while it is held) |
+| L1 | the game's Triangle: casts the attack spell out |
+| Square | uses the current hotkey (the game's Select, the hotkey lent into its slot) |
+| d-pad Right / Left | swaps the right hand's weapon / the left hand's spell |
+| d-pad Down / Up | the next / previous hotkey that holds something |
+| L2, R2 | nothing |
+| the sticks | walk and strafe, turn and look (twin stick; 3D controls are set aside) |
 
-Measured 2026-11-11, slot 2 in fdat05, through `KF2_SHELL`: `9/9 hooked`; Equipment ▸
-the Select row ▸ the first entry ▸ Yes opened the which-shortcut list (5 rows, the menu
-pointer driving it), and a click on its second row logged `item 0x47 -> shortcut 2`
-and returned to Equipment; a `shortcuts_slot2.txt` of `-1,71` / `3,-1` loaded as
-`FF/47 03/FF FF/FF FF/FF` at autostart and on `load 2`. `scripts/fuzz.py --runs 12 --env
-KF2_SHORTCUTS=1`: 240,000 frames, no findings. **Not tried**: firing a shortcut (a key or
-pad button is polled from the host, which nothing headless presses), the d-pad takeover,
-a card save writing the file, a Japanese run, the picture of the list.
+Keyboard: unchanged (Space swings, Q casts, A/D strafe), plus 1-5 to use a hotkey, X to
+swap the weapon and Z the spell, all rebindable. Menus keep the pad as it was.
+
+- **What a hand has out is the game's own equipment.** The weapon out is the weapon
+  byte `0x801994AF`, swapped through the game's own equip `func_80026210(id)` (the
+  byte, the record at `0x80199494`, the arm's model read from disc, the stats); the spell
+  out is the attack spell `0x801994AB`. The port keeps only the other slot of each hand
+  and which slot is out, so the swing, the cast, MP, the stats and the arm are the
+  game's. A weapon swap during a swing or a drawn bow (`s16 0x801994A4` not -1) waits
+  for it to end. A weapon put away and then sold or dropped (count 0 at `0x8009B52C`)
+  leaves its slot.
+- **Assigning.** After the game's Yes, the weapon page (`func_80026210` from
+  `0x8001AA4C`) asks WEAPON 1 / WEAPON 2 and the attack magic page (`0x80025F70` from
+  `0x8001AD68`) MAGIC 1 / MAGIC 2, in a list of the game's own kind (`Picker`, now
+  taking any rows). The slot that is out lets the game's setter run; the other slot is
+  kept here and the setter skipped; the one already out picked for the other slot moves
+  there; backing out changes nothing. The Select row asks which hotkey, as before;
+  hotkey 1 is the game's Select slot.
+- **The pad** (`PadLayout`). The physical pad's buttons are watched where the runtime
+  polls them (0123's `HostWindow.PadButtons`, chained after the Japanese ○/× swap, and
+  returned unchanged), and each new press of Square or a d-pad direction is counted.
+  A press is a real button's only: the runtime's default bindings put the left
+  stick's four directions on the d-pad's bits too (`Up = [11, 104]`, …), so pushing
+  the stick swapped weapons and cycled hotkeys (reported from play). A button held
+  only through a stick binding (RecompOne 0125's `HostWindow.PadStickButtons`) is not
+  counted; it still leaves the game's word with the rest of the taken bits.
+  The game's pad word `0x80199554` is rewritten in player control's pre-hook
+  (`func_8002957C`), which runs only in the world: the taken buttons' mask bits out,
+  R1 as Square, L1 as Triangle. Stage 3 copies that word into `0x80199556` before its
+  next read, so the edges stay the game's. Presses counted across a gap of more than
+  250 ms between control ticks (a menu, a message, a scene) are dropped.
+  `Analog.OneStick` is `Tank` unless the layout has the pad.
+- **The HUD** (`HandsHud`), after the HUD builder `func_80031D5C` while the HP panel's
+  record (`0x80067774 + 0x24`, its `+0` byte) is drawn: a Souls cross of three cards,
+  the left the magic hand, the right the weapon hand, the middle one 14 pixels lower
+  the current hotkey. **Laid out to work at 240p**, so nothing in it is scaled below
+  the game's own pixels: the cards are 28 x 42, a pixel apart, 86 wide together as the
+  HP panel is; no button labels (the `LB` and `RB` over the hands' outer top corners,
+  which had replaced slot numbers, were taken off as clutter); an item hotkey its count in the bottom
+  right, a spell its numeral in the bottom left, both in the
+  number font the counts and the HP panel use, at its own size (7 x 14): the numeral's I
+  is the font's serifed 1, advanced 5, and its V and X are the strip's signs 17 and 18,
+  the cells the game spells LV and EXP with (it was the menu's white capitals, which did
+  not match; reported from play). No
+  names: the model and the number say it. **The margins are the panel's**: its left
+  edge (record 13's X, native 5, moved out by `Widescreen.AnchoredHudX` when the HUD is
+  anchored; `Widescreen.NativeHudX` reads the native X inside the builder's hooks in
+  either order), and its distance from the top (Y 12) as the distance from the bottom,
+  so the cross spans y 172..228. Measured from the packets: the frames at x -49..-21,
+  -20..8 and 9..36 anchored at a 54 margin (the panel's own at -49), y 172..214 and
+  186..228. Kept left of native x 96 and so clear of the message strip at (96, 203).
+- **The cards are the HP panel's frame** (`CardFrame`). The panel is HUD record 13:
+  model 16, a 2000 x 1000 frame whose 128-unit bevel is sunk 512 deep (eight lit,
+  textured quads round two translucent ones), light record `0x48`, scale
+  (178, 200, 2)/4096, Z 40; a 1:1 orthographic transform, so 87 x 49 pixels with a
+  5.56 x 6.25 bevel, matching the panel measured off a screenshot (x 5, y 12, 4.6875
+  window pixels to a game pixel). Each card is drawn through the builder's own calls
+  (`func_80034834` the model, `func_8002E1BC`, the record's light record into
+  `func_8002DDDC`, `SetBackColor`, `SetColorMatrix`, `SetLightMatrix`, the scale as the
+  rotation, `func_8002E1F0`, `func_8002E910`, `func_8002F214`), with the vertex base
+  pointed at a moved copy of the model's vertices on the stack: within the bevel of an
+  edge a vertex keeps its distance from it, the rest is spread across, so the bevel is
+  the panel's at any size. The model in the bank is never written. The model units are
+  rounded up, since the transform drops the fraction (the bottom fell at 227). The
+  first version drew the menu's nine window pieces at 0.3 of their 33-texel size, which
+  matched nothing and would shimmer at 240p, with a name line under the cross.
+  **The bevel is narrower than the panel's by whole pixels** (`HandsHud.BevelLess`,
+  asked for after the first look for room inside; 3 now, chosen in play), from the
+  panel's as drawn, 5 across and 6 down, so 2 x 3; the opening 24 x 36, the outer edges
+  unmoved. **Every vertex is placed on a whole pixel**, the bevel and the middle column
+  alike: the HUD transform drops the fraction and publishes none for a piece the matrix
+  does not turn, so a bevel of 3.56 pixels was drawn 3 on the left and 4 on the right
+  (4 and 5 top and bottom) and the inside sat left of centre at every bevel tried
+  (reported from play). Measured from the packets, all three cards: 2 and 2 across, 3
+  and 3 down. **Not lit per pixel**: per-pixel
+  lighting and the packet depth leave the HUD alone through `PolyAssembler.InHud`, which
+  `PerPixelLighting` raises only inside the builder, so the cross (drawn in a post-hook,
+  after that flag's post had lowered it) was lit per pixel, cards and models both
+  (reported from play). `HandsHud.Draw` holds the flag itself for its draw and puts back
+  what it found. **Not judged by eye.**
+- **The icons are the items' own models** (`HandsIcons`). The game has no 2D icons; its
+  HUD is small models drawn without perspective, and so are these: the orthographic
+  `func_8002E910` and the lit `func_8002F214`, with the current model pointed for the
+  call at a TMD of the port's, lit as the menu's preview lights its model
+  (`func_8002156C`: back colour 60, a white colour matrix, its fixed light matrix turned
+  with the model; the HUD's own light records left them too dark). Each is read with the
+  preview's own routines (`func_80017F1C(6, id, 0)` its size, `func_800183A0(6, id, dst)`,
+  then the fix-up `func_8002E314`) into a slot of `PrimBuffer.IconScratch` (`0x30000`
+  bytes past the card messages, three slots: weapon, magic, hotkey), at a control tick
+  and only when the box's item changes. **Posed large and cropped, as Demon's Souls
+  frames its equipment** (asked for after the whole-model fit, which read as small): the
+  pose is worked out once per model and card inside (24 x 36) and held still. A weapon is
+  stood on its length, the line through its two vertices farthest apart (pommel to
+  point), with its flat to the eye (the direction its vertices spread least across that
+  line), then 17 degrees off it so the edge shows. **The models are not drawn along their
+  axes**: the dagger lies diagonally in its own X-Y plane (x -289..269, y -167..210, z
+  -32..32), so standing it on its bounding box's longest axis laid every blade 27 degrees
+  off level with its guard off the card (reported from play; the drawn vertices matched
+  the GTE's to a pixel, so the transform was right and the pose wrong). It is then laid along the
+  card's own diagonal (not 45 degrees: the card is tall); a blade's wide end (the guard)
+  goes bottom left and its point runs off the top right, and the morning star, the battle
+  hammer and the crescent axe (ids 3, 4, 6, whose wide end is the head) the other way
+  about. It is drawn as long as 1.45 card diagonals unless its width would leave the
+  card's chord across the diagonal first, centred on a point 0.3 of its length in from
+  the end that names it, shifted 0.05 diagonals toward that end's corner. Anything else
+  (crystals, herbs, keys) is turned to show the largest box, tipped 28 degrees toward the
+  eye, and drawn 1.3 times the size that fits, centred. **Clipped to the inside by the
+  GPU's draw area** (`IconClip`): the ordering table's heads are recorded before the lit
+  assembler runs; every slot whose head moved now starts with the model's packets and
+  ends at the old head, and those are bracketed by two `E3`/`E4` packets out of the
+  frame's primitive buffer, the card's inside and then the frame's own clip, read from
+  the draw environment the frame is drawn under (`0x8017E084` into the DRAWENVs at
+  `0x8018E0AC`). Both renderers honour it (the GL backend as its scissor). With no room
+  for the packets the model is unlinked, not drawn unclipped; a card the draw area
+  cannot express (anchored into the widescreen margin, left of VRAM x 0) is drawn whole
+  in the same pose, fitted. The `hands` verb's `iconClip` counts them. Measured after the
+  fix: the dagger's drawn axis -55.4 degrees, the morning star's -57.3, against the
+  card's diagonal at -56.3. Measured headless,
+  slot 2 in fdat05, one icon: 1,383 models bracketed over 3 slots each, none dropped,
+  none whole. **Not judged by eye**, nor seen through the GL renderer. (The first version
+  spun each model and scaled it by its 3D radius, which left a dagger a sliver; the
+  second fitted the whole projected model in the card.)
+- **A spell is its crystal and a level** (`SpellCrystals`): the item model of its
+  element's crystal (FIRE, WATER, EARTH, WIND, LIGHT, DARK CRYSTAL, items 90-95) with a
+  Roman numeral in the box's corner, its rank by MP cost (record `+0x16` at
+  `0x8019C5EC + id * 26`) among its element's spells, cheapest I. The game keeps no
+  element for a spell (a record is a damage per kind and the cost), so the element is
+  the port's reading of the name, and a table to move a spell: water WATER FALL, ICE
+  STORM, FREEZE, DISPOISON; earth STONE, EARTH WAVE, METEOR, EARTH HEAL; wind WIND
+  CUTTER, MISSILE SHIELD, BREATH; fire FIRE BALL, FIRE WALL, FIRE STORM, FLAME, RESIST
+  FIRE; light LIGHTNING VOLT, FLASH, LIGHT; dark SEATH. So WIND CUTTER (3 MP) is WIND I,
+  METEOR EARTH IV, LIGHTNING VOLT LIGHT II. A hotkey holding a spell shows the same.
+  `hands records` dumps the twenty records.
+- **Files.** `shortcuts_slotN.txt`, the mod's own format, for hotkeys 2-5;
+  `hands_slotN.txt`, one line `rightOut,rightAway,leftOut,leftAway,hotkey` (-1 none),
+  for the rest, beside it. Written on a card save while on or anything is kept, read on
+  every card load, cleared by a new game or a death without Seath's Tear.
+- **Hidden with the game's panel.** The gate was `u8 0x801994DD`, the options
+  screen's HUD toggle the records are copied from, and it stays 1 in a menu: before the
+  menu loop (and a shop or a talk) `func_80029C50` runs stage 13 once with the toggle
+  zeroed, which leaves the records hidden, and MenuWorld's passes draw from the records
+  without the copy. So the game's panel was gone behind a menu and the cross was not
+  (reported from play). Measured headless, slot 2 in fdat05, the menu opened with
+  `press Start`: the toggle read 1 on every frame; the record read hidden on all 61
+  menu frames a second and drawn on all 121 in play.
+- **Gone**: a pad button per shortcut and the d-pad takeover (`kf2.shortcuts.padN`,
+  `kf2.shortcuts.dpad` are no longer read; the pad's layout is fixed).
+
+Measured 2026-11-11, slot 2 in fdat05, headless through `KF2_SHELL` with
+`KF2_SHORTCUTS=1 KF2_SHORTCUTS_PROBE=1`: `12/12 hooked`; the weapon out's model read
+(item 1, radius 480; item 0, 337); `hands weapon:0` then `hands weapon` equipped weapon 0
+in slot 2 and put weapon 1 away, and back again, the icon re-read each time;
+`hands spell:0`, `hands spell` set the attack spell to 0; with `-1,71` in
+`shortcuts_slot2.txt`, `hands next` made hotkey 2 current (item 71, its model read,
+radius 183) and `hands use` used one (count 2 to 1). Windowed with the HUD drawing,
+`KF2_FPS=144 KF2_FPS_PROBE=1`: 144.0 fps drawn at 15.0 ticks/s, `KF2_PRESENT_PROBE` wide
+288. **Not tried**: a physical pad (R1, L1, Square, the d-pad, the stick no longer swapping, the bow held on R1, the
+d-pad in menus), the assignment pickers on the weapon and magic pages, a card save
+writing `hands_slotN.txt`, a Japanese run. **Not judged** by the user yet: the boxes, the icons, the small letters.
+
+Snapped 2026-11-11 (`snap`, windowed, HUD anchored): the textures are in VRAM in play;
+WIND I, EARTH IV, LIGHT II, DARK I and FIRE I crystals, the BLOOD STONE, the dagger
+and the short sword (after the spread fix) each fill their box with the numerals and
+slot numbers clear of them; the name line in the full-size menu font.
+
+### The cross fades when idle, and answers a press
+
+`CrossFeedback` (`patches/shortcuts/CrossFeedback.cs`), 2026-11-16. **Measured headless,
+not judged by eye or ear.**
+
+- **Idle fade.** 4 s after the last press or change the cross fades over 0.8 s
+  (eased) to 25% opacity. Any press, any change to a card, or the HUD returning after
+  1 s away (a menu, a load, a message) brings it back solid at once. Gameplay ▸
+  Shortcuts ▸ *Fade when idle* (on, `kf2.shortcuts.fade`), `KF2_SHORTCUTS_FADE`.
+
+  **The first cut could not fade, and the hardware is why.** The PS1 blends in four
+  fixed modes, and on a textured face only the texels with the STP bit set. The first
+  cut dimmed the colours and then set blend mode 0 on the faces the game draws
+  opaque (the models' `POLY_GT3` / `POLY_FT3`, the digits' `POLY_FT4`). The user's
+  screenshot showed the icons fully solid: their textures have no STP texels, so the
+  bit changed nothing. The frames, the HP panel's own `POLY_GT4`, are already blended
+  (`0x3E`), so they only dimmed. The fade now goes to the renderer beside the packet
+  (RecompOne `0126`, `PacketOpacity`): each polygon of the cross is recorded with its
+  alpha as it is drawn, and the GL backend blends every texel at that alpha. A face
+  the game already blends keeps its blend with the alpha on top, so the frames'
+  see-through interior is unchanged at full opacity and the fade has no step at its
+  start. The software rasterizer ignores the record, so a headless run shows nothing.
+- **A card that changes pulses**: brighter by half and a pixel larger a side, easing
+  back over 150 ms. A change is noticed from what the card shows (id, level, count,
+  and the current hotkey), so a swap, a step, an item used up and an equip in the
+  menu all pulse the same way. A new game, a death reset or a card load does not.
+- **A press that does nothing** (an empty hand's other slot, no other hotkey to step
+  to, an empty hotkey used) flashes the background of the card it was for (its frame:
+  red up by 0.8, green and blue down by half, fading over 250 ms) and plays sound
+  `0x12`. A first cut shook the whole cross 2 px instead; the user asked for the flash.
+  The user auditioned the game's other sounds for it (2026-11-16) and kept `0x12`: the
+  rest were worse. `KF2_SHORTCUTS_REFUSE=<id>[,<vol>]` (hex) picks another, and the shell's `hands sound:ID[,VOL]` plays any id at the next
+  control tick, to choose one by ear. The ids the game's own code plays: `0x03` and a
+  computed one in the bow `func_800271D0`, `0x0B` the death latch, `0x0C` from
+  `func_8002851C` at a volume set by an impact's size, `0x0D` and `0x10`-`0x12` the menu,
+  `0x14` stage 2, and `0x1B`, `0x23`, `0x2B`, `0x40` elsewhere. Every id `0x00`-`0x5F`
+  played headless without a fault.
+  A swap or a step plays `0x10`. Both are the menu's own: `func_80022DC4(id)` plays
+  `0x10`-`0x12` as `func_800142F4(id, 0x30, 0x30, 0)`, and the list cursor
+  `func_8001EB70` plays `0x10` on a step and `0x12` on a back out. The port calls
+  `func_800142F4` directly, not `func_80022DC4`, which also advances the music
+  sequence a tick (`SsSeqCalledTbyT`). **The weapon equip `func_80026210` plays no
+  sound**: the voice table at `0x801989B0` was byte for byte the same across both
+  swaps, and its body calls only the disc read, the model set and the stats.
+- **How it is applied.** After each part of the cross is drawn, the packets it put in
+  the frame's buffer (from the descriptor's cursor before to after) are walked by
+  their length byte and recoloured in place. Anything that is not a polygon or a
+  sprite is stepped over (the icons' `E3` draw-area packets). Measured, every range
+  parsed to its end: the frames 8 × `3E/12`, an icon `34/9` and `24/7` faces then
+  four `E3/2`.
+
+Measured 2026-11-16, windowed, the world held with `pause on`: `snap hash` changed
+between the solid cross and the faded one (126,161 pixels, 3.4% of 2568 × 1440) and
+not again a second later; `cross faded, 20144 packets drawn faded so far`;
+`KF2_FPS=144 KF2_FPS_PROBE=1` 144.0 fps drawn. Earlier the same day, headless, slot 2
+in fdat05, `KF2_SHORTCUTS=1 KF2_SHORTCUTS_PROBE=1` through `KF2_SHELL`: `cross faded`
+4.5 s after the last press; `hands weapon` gave `stepped,
+sound 0x10`, `Weapon card pulses (1 -> 0)` and `cross solid`, and back again;
+`hands spell` and `hands next` with nothing to go to gave `Magic refused, flash and
+sound 0x12` and `Hotkey refused, ...`, `hands weapon` with nothing put away `Weapon
+refused, ...`. Windowed with `KF2_AUDIO_PROBE=1`, six refusals took the live voices
+from 8 to 10 and back to 8 once they ended. This fits the sound being keyed, but it
+was not heard. `python3 scripts/fuzz.py --runs 12 --env KF2_SHORTCUTS=1`: 0 findings.
+**Not judged**: the 25% fade (the semi-bit cut was judged and rejected), the pulse, the red flash, and whether the
+two sounds are the right ones and loud enough.
 
 ## NPC dialogue
 

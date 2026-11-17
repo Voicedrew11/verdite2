@@ -10,7 +10,7 @@ using Recompiled;
 
 Verdite.Core.Game.Configure(tag: "KF2");
 
-// Runs nobody watches: no window, no GL context, no audio device (runtime 0111),
+// Runs nobody watches: no window, no GL context, no audio device (runtime 0112),
 // and a world that ticks every frame with nothing waiting (FramePacing.Turbo).
 // The fuzzer's two switches; see "Fuzzing headless playthroughs" in
 // docs/DEVELOPMENT.md.
@@ -1285,8 +1285,12 @@ Kf2.CursorMemory.Install();
 //
 //     KF2_SHORTCUTS=0|1       off or on for the run
 //     KF2_SHORTCUTS_PROBE=1   a line for each assignment, shortcut fired and card load
+//     KF2_SHORTCUTS_FADE=0|1  the hands cross fades when idle (on), or stays solid
+//     KF2_SHORTCUTS_REFUSE=<hex>[,<hex>]  the refusal's sound id and volume (12,30)
 Kf2.Shortcuts.Shortcuts.Configure(Environment.GetEnvironmentVariable("KF2_SHORTCUTS"),
-                                  Environment.GetEnvironmentVariable("KF2_SHORTCUTS_PROBE"));
+                                  Environment.GetEnvironmentVariable("KF2_SHORTCUTS_PROBE"),
+                                  Environment.GetEnvironmentVariable("KF2_SHORTCUTS_FADE"),
+                                  Environment.GetEnvironmentVariable("KF2_SHORTCUTS_REFUSE"));
 Kf2.Shortcuts.Shortcuts.Install();
 
 // NPC conversations as King's Field III's: while an NPC's line is up, Interact

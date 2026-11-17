@@ -160,6 +160,11 @@ public static class Analog
     /// <see cref="ControlsKey"/>, as every switch of this port is.</summary>
     public static bool Tank;
 
+    /// <summary>3D controls in effect: <see cref="Tank"/>, unless the Souls layout of
+    /// Shortcuts has the pad (<see cref="Kf2.Shortcuts.PadLayout"/>), which takes the
+    /// shoulders and the d-pad off movement and so needs both sticks.</summary>
+    public static bool OneStick => Tank && !Kf2.Shortcuts.PadLayout.On;
+
     // Look acceleration: hold the stick out and the camera keeps speeding up for
     // the first half second, instead of sitting at one rate the moment you touch
     // it. This is what a modern shooter's stick does and what the game, built for
@@ -483,12 +488,12 @@ public static class Analog
         // 3D is one stick, as tank controls are: the right stick is not read at all,
         // L2 and R2 look as the game has them, and the left stick turns. So the left
         // stick needs only "walks" there, not "the right stick turns and looks".
-        bool right = Enabled && AnalogLook && !Tank;
-        bool left = Enabled && AnalogMove && (Tank || AnalogLook);
+        bool right = Enabled && AnalogLook && !OneStick;
+        bool left = Enabled && AnalogMove && (OneStick || AnalogLook);
         var (x, y) = right ? Shape(Controller.RightX, Controller.RightY, LookDeadzone, LookCurve)
                            : (0f, 0f);
         // Read once: the left stick's turn for 3D, which is also the stick's share below.
-        (float X, float Y) tankLeft = Tank ? TankLeft : (0f, 0f);
+        (float X, float Y) tankLeft = OneStick ? TankLeft : (0f, 0f);
 
         // Mouse aim (MouseAim): the motion moves a reticle, and what is spent is the
         // step toward it at the D-pad's rate, as the mouse's amount. The pointer
@@ -502,7 +507,7 @@ public static class Analog
                 ushort padNow = m.ReadU16(Pad);
                 bool dpadTurn = (padNow & ((ushort)m.ReadU32(MaskTurnInc) | (ushort)m.ReadU32(MaskTurnDec))) != 0;
                 bool dpadPitch = (padNow & ((ushort)m.ReadU32(MaskPitchInc) | (ushort)m.ReadU32(MaskPitchDec))) != 0;
-                bool yieldYaw = (right && x != 0f) || (Tank && left && tankLeft.X != 0f) || gTurn != 0f
+                bool yieldYaw = (right && x != 0f) || (OneStick && left && tankLeft.X != 0f) || gTurn != 0f
                                 || _rampTurnLive || dpadTurn;
                 bool yieldPitch = (right && y != 0f) || gPitch != 0f || _rampPitchLive || dpadPitch;
                 (mTurn, mPitch) = MouseAim.Steer(m, mTurn, mPitch, (int)m.ReadU32(TurnRate), yieldYaw, yieldPitch);
@@ -527,7 +532,7 @@ public static class Analog
         // zeroed, and the D-pad still turns when neither stick is deflected. In 3D
         // the same ownership is what makes the sideways push the stick's turn.
         var (lx, ly) = !left ? (0f, 0f)
-                     : Tank ? tankLeft
+                     : OneStick ? tankLeft
                      : Shape(Controller.LeftX, Controller.LeftY, MoveDeadzone, MoveCurve);
         bool leftActive = left && (lx != 0f || ly != 0f);
 
@@ -541,7 +546,7 @@ public static class Analog
         // camera that carries on for a third of a second afterwards is simply
         // wrong. Hence the separate flags, which ignore CameraInstantStop.
         // A direct stick (StickEase off) stops dead as well, having no ease to stop by.
-        bool direct = !StickEase && !Tank;
+        bool direct = !StickEase && !OneStick;
         bool stopDead = CameraInstantStop || direct;
         bool releaseTurn  = (stopDead && _ownedTurn)  || _mouseTurn;
         bool releasePitch = (stopDead && _ownedPitch) || _mousePitch;
@@ -571,7 +576,7 @@ public static class Analog
         // decreasing branch, in both.
         float turnWant = -x * rate * TurnSens * mult * (InvertTurn ? -1f : 1f);
         float pitchWant = y * PitchVelMax * PitchSens * mult * (InvertPitch ? -1f : 1f);
-        bool tankTurn = Tank && leftActive;
+        bool tankTurn = OneStick && leftActive;
         if (tankTurn) turnWant = -lx * rate * TurnSens * (InvertTurn ? -1f : 1f);
 
         // The stick's share of each step, so FrameSmoothing can tell how much of
@@ -589,7 +594,7 @@ public static class Analog
             : 0f;
         if (direct) _rampTurnLive = _rampPitchLive = false;
         // The instant stop asks for the opposite, and is the player's to choose.
-        if (CameraInstantStop && x == 0f && !Tank) { stickTurn = 0f; _rampTurnLive = false; }
+        if (CameraInstantStop && x == 0f && !OneStick) { stickTurn = 0f; _rampTurnLive = false; }
         if (CameraInstantStop && y == 0f) { stickPitch = 0f; _rampPitchLive = false; }
         float tankWant = tankTurn ? turnWant : 0f;
         stickTurn += gTurn;
@@ -610,7 +615,7 @@ public static class Analog
             // 3D's release is the D-pad's: the stick back inside its deadzone leaves
             // the velocity to the game's decay, the ramp-down a released Left/Right
             // gets, rather than CameraInstantStop's zero, which is the right stick's.
-            _ownedTurn = step != 0 && !Tank;
+            _ownedTurn = step != 0 && !OneStick;
             _mouseTurn = mTurn != 0f || gTurn != 0f;
         }
 
@@ -658,7 +663,7 @@ public static class Analog
         // 3D: the stick's sideways deflection turns (BeforeLook), not strafes, and the
         // walk is read on its own deadzone, so a turn does not creep forward or back.
         // L1 and R1 still strafe: the strafe bits are left alone when x is zero.
-        var (x, y) = Tank ? (0f, TankLeft.Y)
+        var (x, y) = OneStick ? (0f, TankLeft.Y)
                           : Shape(Controller.LeftX, Controller.LeftY, MoveDeadzone, MoveCurve);
         if (x == 0f && y == 0f) return;
 

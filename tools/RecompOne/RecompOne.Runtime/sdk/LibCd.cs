@@ -222,7 +222,11 @@ public static class LibCd
     {
         var sectors = (int)c.A0;
         var buf = c.A1;
-        _mode = (byte)c.A2;
+        //0118. libcd sizes the copy by the caller's mode but always runs the drive
+        //with ModeSize1, so it can check each sector's header. The drive stays that
+        //way after the read, and a game's own ReadN relies on it.
+        var callerMode = (byte)c.A2;
+        _mode = (byte)(callerMode | ModeSize1);
         var lba = CurrentLba;
 
         _xaActive = false;
@@ -239,7 +243,7 @@ public static class LibCd
             return;
         }
 
-        var size = SectorSize(_mode);
+        var size = SectorSize(callerMode);
         Dispatcher.LoadByLba(lba);
         Log.Sdk($"CdRead sectors={sectors} buf=0x{buf:X8} mode=0x{_mode:X2} lba={lba} size={size}");
 
@@ -423,6 +427,7 @@ public static class LibCd
                     var lba = CurrentLba;
                     _int1Lba = lba;
                     FifoReload(lba);
+                    var setlocs = _setlocCount;
                     if (_cbReady != 0)
                     {
                         c.A0 = DataReady;
@@ -430,7 +435,7 @@ public static class LibCd
                         Dispatcher.Call(c, m, _cbReady);
                     }
 
-                    AdvancePos(1);
+                    if (setlocs == _setlocCount) AdvancePos(1);
                     Dispatcher.LoadByLba(CurrentLba);
                     if (_cbData != 0)
                     {
@@ -689,8 +694,9 @@ public static class LibCd
                 _cdDataPending = false;
                 c.A0 = DataReady;
                 c.A1 = PublishStatus(m);
+                var setlocs = _setlocCount;
                 Dispatcher.Call(c, m, _cbReady);
-                AdvancePos(1);
+                if (setlocs == _setlocCount) AdvancePos(1);
                 Dispatcher.LoadByLba(CurrentLba);
                 if (!_cdDataPending) break;
             }
@@ -878,6 +884,10 @@ public static class LibCd
     }
 
     private static int _int1Lba = -1;
+
+    //0119. A sector callback that issues a seek has moved the head; stepping past
+    //the sector it was handed would start the new read one sector late.
+    private static int _setlocCount;
     private static int _fifoLba = -1;
     private static int _fifoOff;
 
@@ -1206,6 +1216,7 @@ public static class LibCd
                         for (var i = 0; i < 4; i++) _pos[i] = m.ReadU8(param + (uint)i);
                     }
 
+                _setlocCount++;
                 _readActive = false;
                 lock (_dataIrqQueue)
                 {

@@ -5,13 +5,25 @@ using KingsField2 = Recompiled.KingsField2_game;
 namespace Kf2.Shortcuts;
 
 /// <summary>
-/// "Which shortcut?": a list of the game's own kind (stepped by func_8001EB70, drawn by
-/// func_800209E0, as the Encyclopedia's pages are), run as a modal loop inside the game's
-/// spell setter, on a scratch frame below the caller's stack. Every word is drawn with
-/// the game's label routine func_80021E10. Game thread.
+/// "Which slot?": a list of the game's own kind (stepped by func_8001EB70, drawn by
+/// func_800209E0, as the Encyclopedia's pages are), run as a modal loop inside one of the
+/// game's setters, on a scratch frame below the caller's stack: which hotkey an item or
+/// spell goes on, or which of a hand's two slots a weapon or attack spell goes in. Every
+/// word is drawn with the game's label routine func_80021E10. Game thread.
 /// </summary>
 static class Picker
 {
+    /// <summary>What a list asks: its title, its rows' labels and what each row holds now.</summary>
+    internal sealed class Question
+    {
+        public required Func<byte[]> Title;
+        public required int Rows;
+        public required Func<int, byte[]> Label;
+        public required Func<IMemory, int, byte[]> Holds;
+        /// <summary>The row the cursor opens on, remembered between asks.</summary>
+        public int LastPick;
+    }
+
     const uint Quantity = 0x8006E5C8;                        // u32 Left/Right counter func_8001EB70 steps
     const uint TextFont = 0x80064BF0;                        // func_80021E10's template
     const uint HeaderBox = 0x80064C20;
@@ -30,11 +42,12 @@ static class Picker
     const int BoxX = 147, BoxY = 19, BoxWidth = 124, BoxInset = 6;
 
     static uint _base;
-    static int _lastPick;
+    static Question _q = null!;
 
-    /// <summary>-1 back, 0 the game's Select, 1..4 a shortcut of the port's.</summary>
-    public static int Run(CpuContext c, IMemory m, byte spell, byte item)
+    /// <summary>-1 back, else the row picked.</summary>
+    public static int Run(CpuContext c, IMemory m, Question q, byte spell, byte item)
     {
+        _q = q;
         var snap = c.Snapshot();
         uint quantity = m.ReadU32(Quantity);
         try
@@ -51,7 +64,7 @@ static class Picker
 
             byte[] what = Labels.Name(m, spell, item) ?? Labels.Cells(m, Labels.RemoveLabel);
             uint d = _base + OffDesc, confirmed = _base + OffFlags, result = confirmed + 4;
-            InitDesc(m, d, Math.Clamp(_lastPick, 0, Shortcuts.Count - 1));
+            InitDesc(m, d, Math.Clamp(q.LastPick, 0, q.Rows - 1));
             m.WriteU32(confirmed, 0);
             m.WriteU32(result, Unset);
 
@@ -69,7 +82,7 @@ static class Picker
                 if (m.ReadU32(confirmed) != 0)
                 {
                     int sel = m.ReadU8(d + 0x21);
-                    _lastPick = sel;
+                    q.LastPick = sel;
                     Call(c, m, KingsField2.func_80022DC4, ConfirmSound);
                     Call(c, m, KingsField2.func_80022EFC);
                     return sel;
@@ -89,11 +102,11 @@ static class Picker
         for (uint i = 0; i < 0x40; i++) m.WriteU8(d + i, 0);
         m.WriteU16(d + 0x00, HeaderX);
         m.WriteU16(d + 0x02, HeaderY);
-        Labels.WriteCells(m, d + 4, Shortcuts.KeyboardLabels ? Labels.Word("hotkeys", "Hotkeys") : Labels.Word("shortcuts", "Shortcuts"));
+        Labels.WriteCells(m, d + 4, _q.Title());
         m.WriteU8(d + 0x1C, ListLeft);
         m.WriteU8(d + 0x1D, ListTop);
-        m.WriteU8(d + 0x1E, Shortcuts.Count);
-        m.WriteU8(d + 0x1F, Shortcuts.Count);
+        m.WriteU8(d + 0x1E, (byte)_q.Rows);
+        m.WriteU8(d + 0x1F, (byte)_q.Rows);
         m.WriteU8(d + 0x20, 0);
         m.WriteU8(d + 0x21, (byte)sel);
         m.WriteU8(d + 0x22, (byte)sel);
@@ -120,10 +133,10 @@ static class Picker
     static void DrawRows(CpuContext c, IMemory m, uint d)
     {
         int x = m.ReadU8(d + 0x1C) + RowInset, y = m.ReadU8(d + 0x1D) + RowInset;
-        for (int r = 0; r < Shortcuts.Count; r++)
+        for (int r = 0; r < _q.Rows; r++)
         {
-            Draw(c, m, x, y + RowHeight * r, Labels.Word(null, Labels.Label(r)));
-            Draw(c, m, x + NameColumn, y + RowHeight * r, Labels.Contents(m, r));
+            Draw(c, m, x, y + RowHeight * r, _q.Label(r));
+            Draw(c, m, x + NameColumn, y + RowHeight * r, _q.Holds(m, r));
         }
     }
 
