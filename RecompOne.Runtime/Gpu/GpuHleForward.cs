@@ -37,7 +37,11 @@ public sealed partial class Gpu
     PrimFlags PrimOf(bool tex, bool semi, bool raw, int clut, bool gouraud = false) => new()
     {
         Textured = tex, SemiTrans = semi, RawTexture = raw, Gouraud = gouraud, TPage = (ushort)CurTPage(), Clut = (ushort)clut,
+        Opacity = _primOpacity,
     };
+
+    // 0126. The opacity PacketOpacity gave the polygon being drawn; 0 outside one.
+    byte _primOpacity;
 
     void HleTri(in Vert a, in Vert b, in Vert c, bool tex, bool gouraud, bool semi, bool raw, int clut)
     {

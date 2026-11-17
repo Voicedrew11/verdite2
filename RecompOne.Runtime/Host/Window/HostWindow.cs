@@ -876,6 +876,7 @@ public static class HostWindow
         _ramTex = CreateTexture(_gl);
 
         Hle.GlVram.Scale = ConfigManager.View.RenderScale;
+        Hle.GlVram.Downsample = ConfigManager.View.Downsample;
         _glBackend = (Hle.GlCore)Hle.GpuBackendFactory.Create(_gl,
             Hle.GpuBackendFactory.Parse(ConfigManager.View.GpuBackend));
         _glBackend.InitGl();
@@ -1172,12 +1173,21 @@ public static class HostWindow
             if (Hle.GpuHle.Active && _glBackend is { Ready: true } && gpu.DisplayEnabled)
             {
                 var wf = _window!.FramebufferSize;
+                // 0129. The size the Output panel drew the picture at last frame, in
+                // framebuffer pixels, so the downsample brings it up to exactly that
+                // and ImGui then draws it one to one. The window before the first frame.
+                var (outW, outH) = (wf.X, wf.Y);
+                if (OutputView.Valid)
+                {
+                    var px = OutputView.Size * ImGui.GetIO().DisplayFramebufferScale;
+                    (outW, outH) = ((int)MathF.Round(px.X), (int)MathF.Round(px.Y));
+                }
                 var display = Profiler.Begin(Profiler.Display);
                 var (tex, tw, th, aspect) = _glBackend.PresentDisplay(
                     gpu.DisplayX, gpu.DisplayY,
                     gpu.DisplayWidth, gpu.DisplayHeight,
                     gpu.Display24Bit,
-                    wf.X, wf.Y);
+                    outW, outH);
                 Profiler.End(display);
                 if (tex != 0) OutputPanel.SetTexture(tex, tw, th, aspect);
                 gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);

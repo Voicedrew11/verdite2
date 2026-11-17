@@ -1,0 +1,332 @@
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+index 97bb0a7..5dcc211 100644
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+@@ -19,6 +19,12 @@ public sealed partial class GlCore
+     int _uwnProjH, _uwnCentre, _uwnScale, _uwnDepthCull, _uwnDepthStep;
+     int _uNrmDepthCull, _uNrmDepthStep;
+     const int FrameDepthUnit = 18;
++    // The map's depth, sampled while models draw. Not the live attachment: models
++    // write that, and a sampler may not read the texture it is drawing into.
++    const int WorldDepthUnit = 15;
++    // On/off for the bury test. How far a fragment may be pulled is the near-wall
++    // check in PrimFs (one tile), not this value.
++    const float OtzBury = 65536f;
+ 
+     void InitMainView()
+     {
+@@ -32,6 +38,7 @@ public sealed partial class GlCore
+         _uwCueFromZ = _gl.GetUniformLocation(_progWorld, "uCueFromZ");
+         int L(string n) => _gl.GetUniformLocation(_progWorld, n);
+         _uwDepthBias = L("uDepthBias"); _uwDepthSlope = L("uDepthSlope"); _uwDepthOnly = L("uDepthOnly"); _uwDepthCap = L("uDepthCap"); _uwDepthCapZ = L("uDepthCapZ");
++        _uwOtzBury = L("uOtzBury"); _uwWorldDepth = L("uWorldDepth");
+         _uwOpaqueDepth = L("uOpaqueDepth"); _uwSwellOn = L("uSwellOn"); _uwSwell = L("uSwell");
+         _uwWaveOn = L("uWaveOn"); _uwWaveN = L("uWaveN"); _uwWaveRect = L("uWaveRect"); _uwWaveR = L("uWaveR");
+         _uwWaveCam = L("uWaveCam"); _uwWaveT = L("uWaveT"); _uwWaveCentre = L("uWaveCentre"); _uwWaveH = L("uWaveH");
+@@ -43,7 +50,20 @@ public sealed partial class GlCore
+         _gl.UseProgram(_progWorld);
+         if (_uwSwellOn >= 0) _gl.Uniform1(_uwSwellOn, 0);
+         if (_uwWaveOn >= 0) _gl.Uniform1(_uwWaveOn, 0);
++        if (_uwWorldDepth >= 0) _gl.Uniform1(_uwWorldDepth, WorldDepthUnit);
++        if (_uwOtzBury >= 0) _gl.Uniform1(_uwOtzBury, OtzBury);
++        if (_progPrim != 0)
++        {
++            // Packets share PrimFs. Their faces carry no near corner, and a live
++            // sampler with no texture makes the draw undefined on some drivers.
++            _gl.UseProgram(_progPrim);
++            int w = _gl.GetUniformLocation(_progPrim, "uWorldDepth");
++            if (w >= 0) _gl.Uniform1(w, WorldDepthUnit);
++            int b = _gl.GetUniformLocation(_progPrim, "uOtzBury");
++            if (b >= 0) _gl.Uniform1(b, 0f);
++        }
+         _gl.UseProgram(0);
++        BindWorldDepthCopy(1, 1);
+         RetainedScene.MainDrawer = DrawWorldMain;
+         RetainedScene.WaterDrawer = DrawWorldWater;
+         RetainedScene.ArmDrawer = DrawWorldArm;
+@@ -60,6 +80,67 @@ public sealed partial class GlCore
+     bool _wMips;
+     // The view depth the normal pass's last water slice reached.
+     float _wDone;
++    int _uwOtzBury = -1, _uwWorldDepth = -1;
++    uint _otzTex, _otzFbo;
++    int _otzW, _otzH;
++
++    /// <summary>A copy of the map's depth for the model bury test. Resized when the
++    /// target changes. The 1x1 from init keeps the sampler complete before the first
++    /// frame.</summary>
++    unsafe void BindWorldDepthCopy(int w, int h)
++    {
++        if (_otzTex != 0 && _otzW == w && _otzH == h)
++        {
++            _gl.ActiveTexture(TextureUnit.Texture0 + WorldDepthUnit);
++            _gl.BindTexture(TextureTarget.Texture2D, _otzTex);
++            _gl.ActiveTexture(TextureUnit.Texture0);
++            return;
++        }
++        uint prev = (uint)_gl.GetInteger(GLEnum.DrawFramebufferBinding);
++        if (_otzTex != 0)
++        {
++            _gl.DeleteTexture(_otzTex);
++            _gl.DeleteFramebuffer(_otzFbo);
++        }
++        _otzTex = _gl.GenTexture();
++        _gl.ActiveTexture(TextureUnit.Texture0 + WorldDepthUnit);
++        _gl.BindTexture(TextureTarget.Texture2D, _otzTex);
++        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
++        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
++        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
++        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
++        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureCompareMode, (int)GLEnum.None);
++        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Depth24Stencil8, (uint)w, (uint)h, 0,
++            PixelFormat.DepthStencil, PixelType.UnsignedInt248, null);
++        _gl.ActiveTexture(TextureUnit.Texture0);
++        _otzFbo = _gl.GenFramebuffer();
++        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _otzFbo);
++        _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthStencilAttachment,
++            TextureTarget.Texture2D, _otzTex, 0);
++        _gl.DrawBuffer(DrawBufferMode.None);
++        _gl.ReadBuffer(ReadBufferMode.None);
++        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, prev);
++        _otzW = w;
++        _otzH = h;
++    }
++
++    /// <summary>The map (and the sky) have been drawn. Keep their depth aside so a
++    /// model face that sticks through a wall can see the wall, not the models
++    /// already drawn over it.</summary>
++    void FreezeWorldDepth(GlDisplayRt rt)
++    {
++        if (_uwOtzBury < 0 || OtzBury <= 0f || rt.TexW <= 0 || rt.TexH <= 0) return;
++        uint draw = (uint)_gl.GetInteger(GLEnum.DrawFramebufferBinding);
++        BindWorldDepthCopy(rt.TexW, rt.TexH);
++        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, rt.Fbo);
++        _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _otzFbo);
++        bool scissor = _gl.IsEnabled(EnableCap.ScissorTest);
++        if (scissor) _gl.Disable(EnableCap.ScissorTest);
++        _gl.BlitFramebuffer(0, 0, rt.TexW, rt.TexH, 0, 0, rt.TexW, rt.TexH,
++            ClearBufferMask.DepthBufferBit, BlitFramebufferFilter.Nearest);
++        if (scissor) _gl.Enable(EnableCap.ScissorTest);
++        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, draw);
++    }
+     int _uwDepthBias, _uwDepthSlope, _uwDepthOnly, _uwSwellOn, _uwSwell, _uwDepthCap = -1, _uwDepthCapZ = -1;
+     int _uwWaveOn, _uwWaveN, _uwWaveRect, _uwWaveR, _uwWaveCam, _uwWaveT, _uwWaveCentre, _uwWaveH, _uwWaveTime, _uwWaveParams;
+     int _uwnSwellOn, _uwnSwell, _uwnZSlice;
+@@ -103,6 +184,7 @@ public sealed partial class GlCore
+         }
+         long t3 = System.Diagnostics.Stopwatch.GetTimestamp();
+         int drawn = DrawMapOpaque();
++        FreezeWorldDepth(rt);
+         // 0086. The models' pixels, for the packets the walk sends after them.
+         _maskModels = RetainedScene.ModelMask || RetainedScene.ModelMaskProbe;
+         if (_maskModels && RetainedScene.MainModelsShown && (models >= 0 || inst >= 0))
+@@ -208,6 +290,7 @@ public sealed partial class GlCore
+         _gl.Disable(EnableCap.Blend);
+         _gl.DepthMask(true);
+         int drawn = DrawMapOpaque();
++        FreezeWorldDepth(p);
+         if (models >= 0) DrawWorldModels(f.MirrorModels, models);
+         if (inst >= 0)
+         {
+@@ -451,6 +534,9 @@ public sealed partial class GlCore
+         var v = mirror ? f.MirrorView : f.View;
+         Span<float> r = [v.R00, v.R01, v.R02, v.R10, v.R11, v.R12, v.R20, v.R21, v.R22];
+         float cx = v.Cx + offX - rt.X + rt.Margin, cy = v.Cy + offY - rt.Y;
++        // The bury test rebuilds the wall plane from this view, fog or no fog.
++        if (_uwClipCentre >= 0) _gl.Uniform2(_uwClipCentre, cx, cy);
++        if (_uwClipH >= 0) _gl.Uniform1(_uwClipH, Math.Max(1f, v.H));
+         // 0068's clip and level fog, as GlCore sends them for a planar batch.
+         if (_uwClipOn >= 0) _gl.Uniform1(_uwClipOn, mirror ? 1 : 0);
+         if (mirror && _uwClipOn >= 0)
+@@ -490,6 +576,7 @@ public sealed partial class GlCore
+     void BindWorldMain(GlDisplayRt rt, bool mips)
+     {
+         _gl.UseProgram(_progWorld);
++        if (_uwOtzBury >= 0) _gl.Uniform1(_uwOtzBury, RetainedScene.Bury ? OtzBury : 0f);
+         if (mips)
+         {
+             _gl.ActiveTexture(TextureUnit.Texture5);
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
+index b515e7b..d8bf9eb 100644
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
+@@ -361,6 +361,7 @@ public sealed partial class GlCore
+         if (_uwModelRgbc >= 0) _gl.Uniform1(_uwModelRgbc, m.Rgbc);
+         if (_uwModelMat >= 0) _gl.Uniform1(_uwModelMat, m.Material);
+         if (_uwModelKeep >= 0) _gl.Uniform1(_uwModelKeep, 1f - Math.Clamp(m.FadeOut, 0f, 1f));
++        if (_uwOtzBury >= 0) _gl.Uniform1(_uwOtzBury, RetainedScene.Bury && !m.Door ? OtzBury : 0f);
+         if (_uwBk >= 0) _gl.Uniform3(_uwBk, m.Bk0, m.Bk1, m.Bk2);
+         if (_uwLcmR >= 0) _gl.Uniform3(_uwLcmR, m.L0, m.L1, m.L2);
+         if (_uwLcmG >= 0) _gl.Uniform3(_uwLcmG, m.L3, m.L4, m.L5);
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index 2b1233e..286042e 100644
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -858,6 +858,12 @@ internal static class GlShaders
+             if (uModelSky != 0) { s0 = floor(s0); s1 = floor(s1); s2 = floor(s2); }
+             return (s1.x - s0.x) * (s2.y - s0.y) - (s1.y - s0.y) * (s2.x - s0.x) > 0.0;
+         }
++
++        // The model's origin in view space, or 0 when it is behind the eye.
++        vec3 modelOriginEye() {
++            vec3 o = uR * (uModelT - uCam) + uT;
++            return o.z > 0.0 ? o : vec3(0.0);
++        }
+         """;
+ 
+     public static readonly string WorldNormalVs = """
+@@ -1613,6 +1619,9 @@ internal static class GlShaders
+         noperspective out vec4 vColor;
+         out vec2 vUV;
+         out float vDepth;
++        // A world model's origin in view space, else 0. PrimFs pulls a pixel back
++        // over a wall when the ray through this origin hits the map behind it.
++        flat out vec3 vModelEye;
+         flat out ivec2 clutBase;
+         flat out ivec2 pageBase;
+         flat out int   texMode;
+@@ -1807,6 +1816,7 @@ internal static class GlShaders
+             vNbXZ = vec2(0.0);
+             vNbDots = vec3(0.0);
+             vFadeXZ = vec2(0.0);
++            vModelEye = vec3(0.0);
+             if (uDepthOnly == 0 && (inLight & 0x80000000u) != 0u) {
+                 recordLit(inLight, inColorF, inCue.x, inCue.y, inRgbc, color, cue, litDots);
+                 uint nbHid = (inFlags >> 13) & 0x3FFFu;
+@@ -1857,6 +1867,10 @@ internal static class GlShaders
+                 gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
+             gl_Position = modelPlace(gl_Position, v);
+             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
++            // The arm is placed in view space and the sky has no depth. Neither
++            // borrows a wall pixel.
++            if (uModel != 0 && uModelSky == 0 && uModelView == 0)
++                vModelEye = modelOriginEye();
+ 
+             bool dots = (flags & 0x40000000u) != 0u;
+             vec3 lit = color;
+@@ -1948,6 +1962,7 @@ internal static class GlShaders
+         noperspective out vec4 vColor;
+         out vec2 vUV;
+         out float vDepth;
++        flat out vec3 vModelEye;
+         flat out ivec2 clutBase;
+         flat out ivec2 pageBase;
+         flat out int   texMode;
+@@ -1988,6 +2003,7 @@ internal static class GlShaders
+             // across the floor where the cave used to continue.
+             gl_Position = vec4(p * inW, 0.0, inW);
+             vDepth = inZ > 0.0 ? inZ * (1.0/65536.0) : 0.0;
++            vModelEye = vec3(0.0);
+ 
+             int inClut = int(inClutF + 0.5);
+             int inTexpage = int(inTexpageF + 0.5);
+@@ -2052,6 +2068,7 @@ internal static class GlShaders
+         noperspective in vec3 vNbDots;
+         // 0089. DistanceFade's world X and Z (WorldVs).
+         in vec2 vFadeXZ;
++        flat in vec3 vModelEye;
+ 
+         layout(location = 0, index = 0) out vec4 FragColor;
+         layout(location = 0, index = 1) out vec4 BlendColor;
+@@ -2076,6 +2093,12 @@ internal static class GlShaders
+         uniform float uDepthSlope;
+         // The tolerance probe's ceiling on the tolerance (RetainedScene.ToleranceProbe).
+         uniform float uDepthCap = 1.0e9;
++        // The map's depth, copied before models draw. A model pixel behind a wall
++        // is drawn when the ray through the model's origin meets the map behind
++        // the origin (0 leaves the test off). That does not change as the camera
++        // turns. A barrel in the next room has the wall in front of its origin.
++        uniform sampler2D uWorldDepth;
++        uniform float uOtzBury = 0.0;
+         // RetainedScene.DepthCapPixels over H: the main view's ceiling on the slope term,
+         // per unit of depth. 0 is none.
+         uniform float uDepthCapZ;
+@@ -2609,7 +2632,47 @@ internal static class GlShaders
+             // game pixels' width there (z / H each), so the term stops at that.
+             if (uDepthCapZ > 0.0) dz = min(dz, uDepthBias + vDepth * uDepthCapZ);
+             dz = min(dz, uDepthCap);
+-            gl_FragDepth = vDepth > 0.0 ? max(vDepth - dz, 0.0) : 1.0;
++            float zd = vDepth > 0.0 ? max(vDepth - dz, 0.0) : 1.0;
++            if (vModelEye.z > 0.0 && uOtzBury > 0.0) {
++                float wall = texelFetch(uWorldDepth, ivec2(gl_FragCoord.xy), 0).r;
++                vec2 game = uClipCentre + vec2(uClipH) * vModelEye.xy / vModelEye.z;
++                float behind = texelFetch(uWorldDepth, ivec2(game * float(uScale)), 0).r;
++                // LEQUAL then prefers this fragment over the wall it ties with, and
++                // anything genuinely nearer than the wall still wins on its own depth.
++                bool inRoom = behind > 0.9999 || behind * 65536.0 > vModelEye.z;
++                // The origin also has to sit near this wall pixel. An open lid's hinge
++                // is about 700 from the wall it cuts, inside one tile (2048). A barrel
++                // whose ray leaves through a doorway is about 3800 from the near wall.
++                float wallZ = wall * 65536.0;
++                vec3 wallEye = vec3((gl_FragCoord.xy / float(uScale) - uClipCentre) * (wallZ / uClipH), wallZ);
++                bool nearWall = distance(wallEye, vModelEye) < 2048.0;
++                if (wall < 0.9999 && zd > wall && inRoom && nearWall) {
++                    // And the origin has to stand clear in front of this wall's plane: an
++                    // open lid's hinge is 384-512 in front of the wall it swings into. A
++                    // plant at a corner sits on the plane of the face its leaf pokes
++                    // through (0-64), a secret door 257 behind its wall.
++                    ivec2 p = ivec2(gl_FragCoord.xy);
++                    // Two game pixels: one screen pixel's step is below the depth's
++                    // precision. Each axis takes the side that stays on this face.
++                    int step = 2 * uScale;
++                    vec3 dx = vec3(0.0), dy = vec3(0.0);
++                    for (int s = -step; s <= step; s += 2 * step) {
++                        vec2 qx = (gl_FragCoord.xy + vec2(s, 0)) / float(uScale) - uClipCentre;
++                        vec2 qy = (gl_FragCoord.xy + vec2(0, s)) / float(uScale) - uClipCentre;
++                        float zx = texelFetch(uWorldDepth, p + ivec2(s, 0), 0).r * 65536.0;
++                        float zy = texelFetch(uWorldDepth, p + ivec2(0, s), 0).r * 65536.0;
++                        vec3 ex = (vec3(qx * (zx / uClipH), zx) - wallEye) * sign(float(s));
++                        vec3 ey = (vec3(qy * (zy / uClipH), zy) - wallEye) * sign(float(s));
++                        if (s < 0 || abs(ex.z) < abs(dx.z)) dx = ex;
++                        if (s < 0 || abs(ey.z) < abs(dy.z)) dy = ey;
++                    }
++                    vec3 n = normalize(cross(dx, dy));
++                    if (dot(n, -wallEye) < 0.0) n = -n;
++                    if (dot(n, vModelEye - wallEye) > 256.0)
++                        zd = wall;
++                }
++            }
++            gl_FragDepth = zd;
+             if (uFarPlane != 0) gl_FragDepth = 1.0;
+             if ((uClipOn != 0 || uRadialFog != 0) && vDepth > 0.0) {
+                 float cz = vDepth * 65536.0;
+diff --git a/RecompOne.Runtime/Gpu/RetainedScene.cs b/RecompOne.Runtime/Gpu/RetainedScene.cs
+index 2017f18..582f9cc 100644
+--- a/RecompOne.Runtime/Gpu/RetainedScene.cs
++++ b/RecompOne.Runtime/Gpu/RetainedScene.cs
+@@ -318,6 +318,9 @@ public static class RetainedScene
+     /// Off, the underside of every floor above a plane is reflected.</summary>
+     public static bool CullBack = true;
+ 
++    /// Model pixels behind a nearby wall are drawn on it (PrimFs's bury test).
++    public static bool Bury = true;
++
+     /// <summary>The probe's switch: GPU time per draw, read back with a query.</summary>
+     public static bool Probe;
+ 
+@@ -873,6 +876,9 @@ public static class RetainedScene
+         /// <summary>A blended model that stands for something solid (a door): its blended
+         /// faces hide what is behind them from the occlusion pass with every texel.</summary>
+         public bool Solid;
++        /// <summary>A door or a secret wall: it sits in the wall it slides through, so
++        /// its hidden faces are never pulled onto that wall (PrimFs's bury test).</summary>
++        public bool Door;
+         /// <summary>The store's generation when it was added; the backend draws none
+         /// from an emptied store.</summary>
+         public int MeshGen;
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index 53d317d..3b067a3 100644
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -2652,7 +2652,10 @@ internal static class GlShaders
+             if (vModelEye.z > 0.0 && uOtzBury > 0.0) {
+                 float wall = texelFetch(uWorldDepth, ivec2(gl_FragCoord.xy), 0).r;
+                 vec2 game = uClipCentre + vec2(uClipH) * vModelEye.xy / vModelEye.z;
+-                float behind = texelFetch(uWorldDepth, ivec2(game * float(uScale)), 0).r;
++                // An origin past the screen's edge reads the map at the edge: a fetch
++                // outside the texture is 0, and a lid at the edge of view lost its wall.
++                ivec2 gp = clamp(ivec2(game * float(uScale)), ivec2(0), textureSize(uWorldDepth, 0) - 1);
++                float behind = texelFetch(uWorldDepth, gp, 0).r;
+                 // LEQUAL then prefers this fragment over the wall it ties with, and
+                 // anything genuinely nearer than the wall still wins on its own depth.
+                 bool inRoom = behind > 0.9999 || behind * 65536.0 > vModelEye.z;

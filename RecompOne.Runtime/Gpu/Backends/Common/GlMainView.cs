@@ -19,6 +19,12 @@ public sealed partial class GlCore
     int _uwnProjH, _uwnCentre, _uwnScale, _uwnDepthCull, _uwnDepthStep;
     int _uNrmDepthCull, _uNrmDepthStep;
     const int FrameDepthUnit = 18;
+    // The map's depth, sampled while models draw. Not the live attachment: models
+    // write that, and a sampler may not read the texture it is drawing into.
+    const int WorldDepthUnit = 15;
+    // On/off for the bury test. How far a fragment may be pulled is the near-wall
+    // check in PrimFs (one tile), not this value.
+    const float OtzBury = 65536f;
 
     void InitMainView()
     {
@@ -32,8 +38,9 @@ public sealed partial class GlCore
         _uwCueFromZ = _gl.GetUniformLocation(_progWorld, "uCueFromZ");
         _uwCueAtCorners = _gl.GetUniformLocation(_progWorld, "uCueAtCorners");
         int L(string n) => _gl.GetUniformLocation(_progWorld, n);
-        _uwDepthBias = L("uDepthBias"); _uwDepthSlope = L("uDepthSlope"); _uwDepthOnly = L("uDepthOnly"); _uwDepthCap = L("uDepthCap"); _uwDepthCapZ = L("uDepthCapZ");
+        _uwDepthBias = L("uDepthBias"); _uwDepthSlope = L("uDepthSlope"); _uwDepthOnly = L("uDepthOnly"); _uwDepthCap = L("uDepthCap"); _uwDepthCapZ = L("uDepthCapZ"); _uwDepthScale = L("uDepthScale");
         _uwDepthPull = L("uDepthPull");
+        _uwOtzBury = L("uOtzBury"); _uwWorldDepth = L("uWorldDepth");
         _uwOpaqueDepth = L("uOpaqueDepth"); _uwSwellOn = L("uSwellOn"); _uwSwell = L("uSwell");
         _uwWaveOn = L("uWaveOn"); _uwWaveN = L("uWaveN"); _uwWaveRect = L("uWaveRect"); _uwWaveR = L("uWaveR");
         _uwWaveCam = L("uWaveCam"); _uwWaveT = L("uWaveT"); _uwWaveCentre = L("uWaveCentre"); _uwWaveH = L("uWaveH");
@@ -45,7 +52,20 @@ public sealed partial class GlCore
         _gl.UseProgram(_progWorld);
         if (_uwSwellOn >= 0) _gl.Uniform1(_uwSwellOn, 0);
         if (_uwWaveOn >= 0) _gl.Uniform1(_uwWaveOn, 0);
+        if (_uwWorldDepth >= 0) _gl.Uniform1(_uwWorldDepth, WorldDepthUnit);
+        if (_uwOtzBury >= 0) _gl.Uniform1(_uwOtzBury, OtzBury);
+        if (_progPrim != 0)
+        {
+            // Packets share PrimFs. Their faces carry no near corner, and a live
+            // sampler with no texture makes the draw undefined on some drivers.
+            _gl.UseProgram(_progPrim);
+            int w = _gl.GetUniformLocation(_progPrim, "uWorldDepth");
+            if (w >= 0) _gl.Uniform1(w, WorldDepthUnit);
+            int b = _gl.GetUniformLocation(_progPrim, "uOtzBury");
+            if (b >= 0) _gl.Uniform1(b, 0f);
+        }
         _gl.UseProgram(0);
+        BindWorldDepthCopy(1, 1);
         RetainedScene.MainDrawer = DrawWorldMain;
         RetainedScene.WaterDrawer = DrawWorldWater;
         RetainedScene.ArmDrawer = DrawWorldArm;
@@ -62,6 +82,67 @@ public sealed partial class GlCore
     bool _wMips;
     // The view depth the normal pass's last water slice reached.
     float _wDone;
+    int _uwDepthScale = -1, _uwOtzBury = -1, _uwWorldDepth = -1;
+    uint _otzTex, _otzFbo;
+    int _otzW, _otzH;
+
+    /// <summary>A copy of the map's depth for the model bury test. Resized when the
+    /// target changes. The 1x1 from init keeps the sampler complete before the first
+    /// frame.</summary>
+    unsafe void BindWorldDepthCopy(int w, int h)
+    {
+        if (_otzTex != 0 && _otzW == w && _otzH == h)
+        {
+            _gl.ActiveTexture(TextureUnit.Texture0 + WorldDepthUnit);
+            _gl.BindTexture(TextureTarget.Texture2D, _otzTex);
+            _gl.ActiveTexture(TextureUnit.Texture0);
+            return;
+        }
+        uint prev = (uint)_gl.GetInteger(GLEnum.DrawFramebufferBinding);
+        if (_otzTex != 0)
+        {
+            _gl.DeleteTexture(_otzTex);
+            _gl.DeleteFramebuffer(_otzFbo);
+        }
+        _otzTex = _gl.GenTexture();
+        _gl.ActiveTexture(TextureUnit.Texture0 + WorldDepthUnit);
+        _gl.BindTexture(TextureTarget.Texture2D, _otzTex);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureCompareMode, (int)GLEnum.None);
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Depth24Stencil8, (uint)w, (uint)h, 0,
+            PixelFormat.DepthStencil, PixelType.UnsignedInt248, null);
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _otzFbo = _gl.GenFramebuffer();
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _otzFbo);
+        _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthStencilAttachment,
+            TextureTarget.Texture2D, _otzTex, 0);
+        _gl.DrawBuffer(DrawBufferMode.None);
+        _gl.ReadBuffer(ReadBufferMode.None);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, prev);
+        _otzW = w;
+        _otzH = h;
+    }
+
+    /// <summary>The map (and the sky) have been drawn. Keep their depth aside so a
+    /// model face that sticks through a wall can see the wall, not the models
+    /// already drawn over it.</summary>
+    void FreezeWorldDepth(GlDisplayRt rt)
+    {
+        if (_uwOtzBury < 0 || OtzBury <= 0f || rt.TexW <= 0 || rt.TexH <= 0) return;
+        uint draw = (uint)_gl.GetInteger(GLEnum.DrawFramebufferBinding);
+        BindWorldDepthCopy(rt.TexW, rt.TexH);
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, rt.Fbo);
+        _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _otzFbo);
+        bool scissor = _gl.IsEnabled(EnableCap.ScissorTest);
+        if (scissor) _gl.Disable(EnableCap.ScissorTest);
+        _gl.BlitFramebuffer(0, 0, rt.TexW, rt.TexH, 0, 0, rt.TexW, rt.TexH,
+            ClearBufferMask.DepthBufferBit, BlitFramebufferFilter.Nearest);
+        if (scissor) _gl.Enable(EnableCap.ScissorTest);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, draw);
+    }
     int _uwDepthBias, _uwDepthSlope, _uwDepthOnly, _uwSwellOn, _uwSwell, _uwDepthCap = -1, _uwDepthCapZ = -1, _uwDepthPull = -1;
     int _uwWaveOn, _uwWaveN, _uwWaveRect, _uwWaveR, _uwWaveCam, _uwWaveT, _uwWaveCentre, _uwWaveH, _uwWaveTime, _uwWaveParams;
     int _uwnSwellOn, _uwnSwell, _uwnZSlice;
@@ -105,6 +186,7 @@ public sealed partial class GlCore
         }
         long t3 = System.Diagnostics.Stopwatch.GetTimestamp();
         int drawn = DrawMapOpaque();
+        FreezeWorldDepth(rt);
         // 0086. The models' pixels, for the packets the walk sends after them.
         _maskModels = RetainedScene.ModelMask || RetainedScene.ModelMaskProbe;
         if (_maskModels && RetainedScene.MainModelsShown && (models >= 0 || inst >= 0))
@@ -212,6 +294,7 @@ public sealed partial class GlCore
         _gl.Disable(EnableCap.Blend);
         _gl.DepthMask(true);
         int drawn = DrawMapOpaque();
+        FreezeWorldDepth(p);
         if (models >= 0) DrawWorldModels(f.MirrorModels, models);
         if (inst >= 0)
         {
@@ -462,6 +545,9 @@ public sealed partial class GlCore
         var v = mirror ? f.MirrorView : f.View;
         Span<float> r = [v.R00, v.R01, v.R02, v.R10, v.R11, v.R12, v.R20, v.R21, v.R22];
         float cx = v.Cx + offX - rt.X + rt.Margin, cy = v.Cy + offY - rt.Y;
+        // The bury test rebuilds the wall plane from this view, fog or no fog.
+        if (_uwClipCentre >= 0) _gl.Uniform2(_uwClipCentre, cx, cy);
+        if (_uwClipH >= 0) _gl.Uniform1(_uwClipH, Math.Max(1f, v.H));
         // 0068's clip and level fog, as GlCore sends them for a planar batch.
         if (_uwClipOn >= 0) _gl.Uniform1(_uwClipOn, mirror ? 1 : 0);
         if (mirror && _uwClipOn >= 0)
@@ -501,6 +587,7 @@ public sealed partial class GlCore
     void BindWorldMain(GlDisplayRt rt, bool mips)
     {
         _gl.UseProgram(_progWorld);
+        if (_uwOtzBury >= 0) _gl.Uniform1(_uwOtzBury, RetainedScene.Bury ? OtzBury : 0f);
         if (mips)
         {
             _gl.ActiveTexture(TextureUnit.Texture5);
@@ -741,9 +828,24 @@ public sealed partial class GlCore
             EnterModels();
             SendInstance(m, true);
             if (!RetainedScene.BlendDepth) _gl.Disable(EnableCap.DepthTest);
+            // A held item's blended faces take the same pull as its opaque ones.
+            bool pulled = m.Front && blend >= 0 && _uwDepthBias >= 0 && _uwDepthScale >= 0;
+            if (pulled)
+            {
+                _gl.Uniform1(_uwDepthBias, 0f);
+                _gl.Uniform1(_uwDepthScale, FrontScale);
+                if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
+            }
             int from = _bIdxAt[a], to = b < _bEntCount ? _bIdxAt[b] : _bIdxCount;
             if (blend >= 0) DrawBlended(blend, to - from, from * 4L);
             else unsafe { _gl.DrawElements(PrimitiveType.Triangles, (uint)(to - from), DrawElementsType.UnsignedInt, (void*)(from * 4L)); }
+            if (pulled)
+            {
+                bool bias = GteDepth.ZBuffer && (GteDepth.DepthBias > 0f || GteDepth.DepthSlope > 0f);
+                _gl.Uniform1(_uwDepthScale, 1f);
+                _gl.Uniform1(_uwDepthBias, bias ? GteDepth.DepthBias / 65536f : 0f);
+                if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, bias ? GteDepth.DepthSlope : 0f);
+            }
             if (!RetainedScene.BlendDepth) _gl.Enable(EnableCap.DepthTest);
             RetainedScene.BlendRuns++;
         }

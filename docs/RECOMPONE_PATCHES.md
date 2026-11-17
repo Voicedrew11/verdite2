@@ -2284,6 +2284,80 @@ Four files in the directory have no entry below:
   valid inside `PadButtons`). The word itself is unchanged. KF2's Souls layout
   (`Shortcuts`) counts d-pad presses without them, so pushing the stick no longer
   swaps a hand or cycles a hotkey. **No recompile.**
+- `0126-packet-opacity.patch` — an opacity a port gives one of its packets.
+  The PlayStation blends in four fixed modes, and on a textured face only the texels
+  with the STP bit set, so a HUD built of the game's own packets cannot fade
+  smoothly: KF2's Shortcuts cross, faded with the semi-transparent bit, stayed solid,
+  because its model textures have no STP texels. `PacketOpacity.Set(packet, cmd, xy0,
+  alpha)` records an alpha (1-254) by the packet's address with its command word and
+  first vertex word; `DrawPolygon` takes the record (once, and only if both words
+  match) into `PrimFlags.Opacity`, and `GlCore` keys batches on it and draws them as
+  `a * src + (1 - a) * dst` through the existing dual-source blend: an opaque texel
+  at `a`, a blended one keeping its mode with its source scaled by `a` (mode 0 is
+  `0.5a` and `1 - 0.5a`, so `a = 1` is the game's). Subtractive packets and the
+  legacy blend path keep the game's blend; the software rasterizer ignores it.
+  `PacketOpacity.Drawn` counts the packets drawn faded. **No recompile.**
+- `0127-model-bury.patch` — a model behind a wall, drawn on it. An open chest lid
+  hangs inside the tile of the wall it swings into, and the per-pixel depth test cut
+  it into a sawtooth where the console, ordering whole polygons by one depth, drew it
+  solid. `GlMainView` copies the map's depth after `DrawMapOpaque` (`uWorldDepth`),
+  `WorldVs` passes a world model's origin in view space (`vModelEye`; not the arm,
+  the sky or a packet), and `PrimFs` writes the wall's depth over a model fragment
+  behind it when three things hold. The ray through the origin meets map behind the
+  origin, read at the screen's edge when the origin is past it (a fetch outside the
+  copy is 0, and a lid at the edge of view lost its wall; the plane's neighbours are
+  clamped the same way, a side clamped onto the pixel skipped, and no plane no pull).
+  The origin is within one
+  tile (2048) of this wall pixel: a barrel seen through a doorway is about 3800 off.
+  And the origin stands more than 256 in front of the wall's plane, rebuilt from the
+  copy two game pixels out: a lid's hinge is 384-512 in front, a corner plant 0-64, a
+  secret door 257 behind. `ModelInstance.Door` is never pulled (KF2 sets it for its
+  doors and secret walls, which slide inside the wall they sit in); `RetainedScene.Bury`
+  is the switch. Measured in KF2, by eye: the lid solid at rest from four angles and
+  at the edge of view and mid-swing, the barrel in the next room hidden, the plant's
+  leaf behind its wall, the floor behind a secret wall no longer drawn on it, monsters
+  pressed against walls whole, and #53's pedestal item and merchant whole. Written
+  in Verdite2's copy as `0113` (#93); renumbered past the fork's on the rebase, where
+  its `0114` (perspective-correct faces truncating down) was dropped for `0009`'s
+  amendment, the same rule. **No recompile.**
+- `0128-front-models.patch` — a model the game shows over the world, drawn over it.
+  A picked-up item flies from where it lay, and its depth is the barrel's or the
+  chest's: depth-tested there, the mask stayed inside its barrel and the shield inside
+  its chest, where the console's table slot put both in front. `ModelInstance.Front`
+  (the game sets it; KF2 for a pickup and the menu preview) sends an instance through
+  `DrawInFront` after the others, with its depth written at `FrontScale` (0.5) of its
+  view depth through `PrimFs`'s `uDepthScale`, and its blended faces take the same.
+  Forcing the depth test to pass was tried first: it put the item in front and
+  painted the shield's grip over the board from every side, since the faces no longer
+  hid one another. A scale keeps the faces testing each other; an offset does not, as
+  at that range any useful one clamps every face to 0 and the last drawn wins. The
+  normal pass draws a front instance last, as `SurfaceMaterial.Overlay` with the depth
+  cull off, so occlusion and reflections read the item and not the chest behind it,
+  which had drawn the chest's outline on the shield and darkened its top. Measured in
+  KF2, by eye: the mask over its barrel looking down, the shield over its chest
+  through the turn with the grip on the side facing the eye, and no outline on it.
+  Written as `0115` (#93); renumbered on the rebase, and merged with `0116`'s pull:
+  `uDepthPull` is added after the caps, then the depth is scaled. **No recompile.**
+- `0129-box-downsample.patch` — the scaled picture averaged back to the game's own
+  pixels. The present texture is the render scale times the display area, and the
+  Output panel drew it to the window bilinearly with no mipmaps: shrunk, that reads
+  four texels in a block of up to sixty-four, and stretched (8x is 1920 lines on a
+  2160-line screen) it smears the raw, unantialiased edges. With
+  `GlVram.Downsample` set, `GlCore.Downsample` runs two passes after the post-fx
+  hook: `DownsampleBoxFs` takes the plain mean of each `scale x scale` block into a
+  texture of the display area at 1x (the widescreen margin included), and
+  `DownsampleUpFs` brings that up to the picture's size with sharp bilinear (flat
+  squares at the largest whole multiple, only the leftover band blended). This is
+  DuckStation's `DownsampleMode=Box`. `PresentDisplay`'s `outW`/`outH`, unused
+  before, is now the Output panel's picture in framebuffer pixels (`OutputView`
+  from the frame before, times `DisplayFramebufferScale`; the window before the
+  first frame), the texture it returns is that size, and `PresentSnap` reads it, so
+  a snap is the picture as drawn. Off by default and at a scale of 1; skipped on
+  the GL 2.1 context and for a 24-bit frame. The key is `Downsample` in the view
+  config, with a checkbox under Display. Measured in KF2 at 8x on a 3840x2160
+  fullscreen: a snap of 3840x2160 that is 9x9 squares of a 428x240 picture, against
+  the 3424x1920 target without it. **How it looks in motion is not judged here.**
+  **No recompile.**
 
 ## Package bumps
 
