@@ -865,6 +865,12 @@ internal static class GlShaders
             if (uModelSky != 0) { s0 = floor(s0); s1 = floor(s1); s2 = floor(s2); }
             return (s1.x - s0.x) * (s2.y - s0.y) - (s1.y - s0.y) * (s2.x - s0.x) > 0.0;
         }
+
+        // The model's origin in view space, or 0 when it is behind the eye.
+        vec3 modelOriginEye() {
+            vec3 o = uR * (uModelT - uCam) + uT;
+            return o.z > 0.0 ? o : vec3(0.0);
+        }
         """;
 
     public static readonly string WorldNormalVs = """
@@ -1620,6 +1626,9 @@ internal static class GlShaders
         noperspective out vec4 vColor;
         out vec2 vUV;
         out float vDepth;
+        // A world model's origin in view space, else 0. PrimFs pulls a pixel back
+        // over a wall when the ray through this origin hits the map behind it.
+        flat out vec3 vModelEye;
         flat out ivec2 clutBase;
         flat out ivec2 pageBase;
         flat out int   texMode;
@@ -1817,6 +1826,7 @@ internal static class GlShaders
             vNbXZ = vec2(0.0);
             vNbDots = vec3(0.0);
             vFadeXZ = vec2(0.0);
+            vModelEye = vec3(0.0);
             if (uDepthOnly == 0 && (inLight & 0x80000000u) != 0u) {
                 recordLit(inLight, inColorF, inCue.x, inCue.y, inRgbc, color, cue, litDots);
                 uint nbHid = (inFlags >> 13) & 0x3FFFu;
@@ -1868,6 +1878,10 @@ internal static class GlShaders
             gl_Position = modelPlace(gl_Position, v);
             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
             vClipped = z < uNear ? 1.0 : 0.0;
+            // The arm is placed in view space and the sky has no depth. Neither
+            // borrows a wall pixel. A held item is pulled by uDepthScale instead.
+            if (uModel != 0 && uModelSky == 0 && uModelView == 0)
+                vModelEye = modelOriginEye();
 
             bool dots = (flags & 0x40000000u) != 0u;
             vec3 lit = color;
@@ -1959,6 +1973,7 @@ internal static class GlShaders
         noperspective out vec4 vColor;
         out vec2 vUV;
         out float vDepth;
+        flat out vec3 vModelEye;
         flat out ivec2 clutBase;
         flat out ivec2 pageBase;
         flat out int   texMode;
@@ -2001,6 +2016,7 @@ internal static class GlShaders
             // across the floor where the cave used to continue.
             gl_Position = vec4(p * inW, 0.0, inW);
             vDepth = inZ > 0.0 ? inZ * (1.0/65536.0) : 0.0;
+            vModelEye = vec3(0.0);
 
             int inClut = int(inClutF + 0.5);
             int inTexpage = int(inTexpageF + 0.5);
@@ -2072,6 +2088,7 @@ internal static class GlShaders
         noperspective in vec3 vNbDots;
         // 0089. DistanceFade's world X and Z (WorldVs).
         in vec2 vFadeXZ;
+        flat in vec3 vModelEye;
 
         layout(location = 0, index = 0) out vec4 FragColor;
         layout(location = 0, index = 1) out vec4 BlendColor;
@@ -2096,6 +2113,16 @@ internal static class GlShaders
         uniform float uDepthSlope;
         // The tolerance probe's ceiling on the tolerance (RetainedScene.ToleranceProbe).
         uniform float uDepthCap = 1.0e9;
+        // The depth written is the view depth times this: 1 for the world, under 1 for a held
+        // item, which then sits in front of what it hangs over while its own faces keep their
+        // order (an absolute pull clamps to 0 at that range, and the last face drawn wins).
+        uniform float uDepthScale = 1.0;
+        // The map's depth, copied before models draw. A model pixel behind a wall
+        // is drawn when the ray through the model's origin meets the map behind
+        // the origin (0 leaves the test off). That does not change as the camera
+        // turns. A barrel in the next room has the wall in front of its origin.
+        uniform sampler2D uWorldDepth;
+        uniform float uOtzBury = 0.0;
         // RetainedScene.DepthCapPixels over H: the main view's ceiling on the slope term,
         // per unit of depth. 0 is none.
         uniform float uDepthCapZ;
@@ -2642,7 +2669,60 @@ internal static class GlShaders
             // game pixels' width there (z / H each), so the term stops at that.
             if (uDepthCapZ > 0.0) dz = min(dz, uDepthBias + vDepth * uDepthCapZ);
             dz = min(dz, uDepthCap) + uDepthPull;
-            gl_FragDepth = vDepth > 0.0 ? max(vDepth - dz, 0.0) : 1.0;
+            float zd = vDepth > 0.0 ? max(vDepth * uDepthScale - dz, 0.0) : 1.0;
+            if (vModelEye.z > 0.0 && uOtzBury > 0.0) {
+                float wall = texelFetch(uWorldDepth, ivec2(gl_FragCoord.xy), 0).r;
+                vec2 game = uClipCentre + vec2(uClipH) * vModelEye.xy / vModelEye.z;
+                // An origin past the screen's edge reads the map at the edge: a fetch
+                // outside the texture is 0, and a lid at the edge of view lost its wall.
+                ivec2 gp = clamp(ivec2(game * float(uScale)), ivec2(0), textureSize(uWorldDepth, 0) - 1);
+                float behind = texelFetch(uWorldDepth, gp, 0).r;
+                // LEQUAL then prefers this fragment over the wall it ties with, and
+                // anything genuinely nearer than the wall still wins on its own depth.
+                bool inRoom = behind > 0.9999 || behind * 65536.0 > vModelEye.z;
+                // The origin also has to sit near this wall pixel. An open lid's hinge
+                // is about 700 from the wall it cuts, inside one tile (2048). A barrel
+                // whose ray leaves through a doorway is about 3800 from the near wall.
+                float wallZ = wall * 65536.0;
+                vec3 wallEye = vec3((gl_FragCoord.xy / float(uScale) - uClipCentre) * (wallZ / uClipH), wallZ);
+                bool nearWall = distance(wallEye, vModelEye) < 2048.0;
+                if (wall < 0.9999 && zd > wall && inRoom && nearWall) {
+                    // And the origin has to stand clear in front of this wall's plane: an
+                    // open lid's hinge is 384-512 in front of the wall it swings into. A
+                    // plant at a corner sits on the plane of the face its leaf pokes
+                    // through (0-64), a secret door 257 behind its wall.
+                    ivec2 p = ivec2(gl_FragCoord.xy);
+                    // Two game pixels: one screen pixel's step is below the depth's
+                    // precision. Each axis takes the side that stays on this face.
+                    int step = 2 * uScale;
+                    // A fetch outside the copy is undefined, so a neighbour past the
+                    // screen's edge is read at the edge, as the origin's is above.
+                    ivec2 last = textureSize(uWorldDepth, 0) - 1;
+                    vec3 dx = vec3(0.0), dy = vec3(0.0);
+                    for (int s = -step; s <= step; s += 2 * step) {
+                        ivec2 px = clamp(p + ivec2(s, 0), ivec2(0), last);
+                        ivec2 py = clamp(p + ivec2(0, s), ivec2(0), last);
+                        vec2 qx = (vec2(px) + 0.5) / float(uScale) - uClipCentre;
+                        vec2 qy = (vec2(py) + 0.5) / float(uScale) - uClipCentre;
+                        float zx = texelFetch(uWorldDepth, px, 0).r * 65536.0;
+                        float zy = texelFetch(uWorldDepth, py, 0).r * 65536.0;
+                        vec3 ex = (vec3(qx * (zx / uClipH), zx) - wallEye) * sign(float(s));
+                        vec3 ey = (vec3(qy * (zy / uClipH), zy) - wallEye) * sign(float(s));
+                        // A side clamped back onto this pixel has no step; the other is taken.
+                        if (px != p && (dx == vec3(0.0) || abs(ex.z) < abs(dx.z))) dx = ex;
+                        if (py != p && (dy == vec3(0.0) || abs(ey.z) < abs(dy.z))) dy = ey;
+                    }
+                    vec3 c = cross(dx, dy);
+                    // No plane (a one-pixel copy, or both sides clamped): no pull.
+                    if (dot(c, c) > 0.0) {
+                        vec3 n = normalize(c);
+                        if (dot(n, -wallEye) < 0.0) n = -n;
+                        if (dot(n, vModelEye - wallEye) > 256.0)
+                            zd = wall;
+                    }
+                }
+            }
+            gl_FragDepth = zd;
             if (uFarPlane != 0) gl_FragDepth = 1.0;
             if ((uClipOn != 0 || uRadialFog != 0) && vDepth > 0.0) {
                 float cz = vDepth * 65536.0;

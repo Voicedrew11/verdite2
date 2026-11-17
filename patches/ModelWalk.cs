@@ -940,9 +940,21 @@ public static class ModelWalk
         c.A2 = rec + 0x14u;
         c.A3 = sp + 0x38u;
         c.RA = 0x800338C0u;
-        if (MirrorOnlySubmit(c, mem)) { if (centred) ItemEye.Restore(mem); return; }
-        KingsField2.func_80032588(c, mem);
-        if (centred) ItemEye.Restore(mem);
+        // A pickup is an object at the barrel's depth. Instanced with the world it is
+        // tested against that barrel and disappears into it; on the console its slot
+        // put it in front. Packets, and no depth record, keep that order.
+        bool over = ItemEye.Drawing(rec) || ItemTurn.Shows(rec);
+        if (over) PolyAssembler.InPreview = true;
+        try
+        {
+            if (MirrorOnlySubmit(c, mem)) { if (centred) ItemEye.Restore(mem); return; }
+            KingsField2.func_80032588(c, mem);
+            if (centred) ItemEye.Restore(mem);
+        }
+        finally
+        {
+            if (over) PolyAssembler.InPreview = false;
+        }
         mem.WriteU8(rec + 3u, (byte)(mem.ReadU8(rec + 3u) | 0x80u));
     }
 

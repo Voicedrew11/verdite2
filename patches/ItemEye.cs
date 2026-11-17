@@ -131,12 +131,23 @@ public static class ItemEye
         _record = 0;
     }
 
+    /// <summary>Whether <paramref name="record"/> is the item this pickup is showing.
+    /// Set for the fly-in, the hold and the fly-out, so the walk can keep it in
+    /// painter's order: its real depth is inside whatever it was sitting on.</summary>
+    public static bool Drawing(uint record) => _inPickup && record != 0 && record == _record;
+
     /// <summary>How far the centring is in, from where stage 13 was called: the fly-in's
     /// and fly-back's step <c>t</c> is <c>s0 - 0x200</c> at the call (the loop steps it
     /// before drawing). Taken on the loop's own pass, not loop pacing's redraws.</summary>
     public static void BeforeStage13(CpuContext c, IMemory m)
     {
         if (!_inPickup || LoopPacing.InRedraw) return;
+        // The record lives at the pickup's sp+0x80 for every draw it makes, not only
+        // the four return addresses below. A look pitched past the aim's clamp still
+        // draws from one of them, but the address the walk sees has to be known
+        // before that switch decides the weight.
+        uint rec = m.ReadU32(c.SP + RecordAt);
+        if (rec >= 0x80010000u && rec < 0x80200000u) _record = rec;
         double t = Math.Clamp(((int)c.S0 - 0x200) / 4096.0, 0.0, 1.0);
         double w;
         switch (c.RA)
@@ -147,7 +158,6 @@ public static class ItemEye
             case FlyBackDraw: w = 1.0 - t; break;
             default: return;
         }
-        _record = m.ReadU32(c.SP + RecordAt);
         _weightWas = _weighed ? _weight : w;
         _weight = w;
         _weighed = true;
