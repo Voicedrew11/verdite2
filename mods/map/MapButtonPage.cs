@@ -34,9 +34,9 @@ public sealed class MapButtonPage : IPatchPage
     // The touchpad is not offered: it opens the game's own map item (core's MapKey),
     // and a second binding to it here would open both.
     static readonly string[] PadButtons =
-        ["L3 (left stick click)", "R3 (right stick click)", "Select / Back", "None"];
+        ["L2 (left trigger)", "R2 (right trigger)", "L3 (left stick click)", "R3 (right stick click)", "None"];
     static readonly int[] PadValues =
-        [Map.PadL3, Map.PadR3, Map.PadSelect, Map.PadNone];
+        [Map.PadL2, Map.PadR2, Map.PadL3, Map.PadR3, Map.PadNone];
 
     public void Draw()
     {
@@ -48,9 +48,10 @@ public sealed class MapButtonPage : IPatchPage
         if (ImGui.Combo("Open the full-screen map with", ref padIdx, PadButtons, PadButtons.Length))
             Map.SetPadButton(PadValues[padIdx]);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("The pad button that opens the map. G on the keyboard always does too.");
+            ImGui.SetTooltip("An extra button for the full map. G on the keyboard always does too.");
 
         ImGui.EndDisabled();
+        PatchSettings.Note("The touchpad, and Back on an Xbox pad, cycles the map: off, the minimap, then the full map. Circle and the D-pad stay the menu's.");
 
         // Wrapped rather than TextDisabled: inside a tab the pane is some 40px
         // narrower than the one this was written against, and TextDisabled does

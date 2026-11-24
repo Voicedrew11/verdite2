@@ -51,7 +51,9 @@ public static class MapKey
 
     const int PadTouchpad = 20;             // SDL_CONTROLLER_BUTTON_TOUCHPAD
 
-    public static bool Enabled { get; private set; } = true;
+    // Off, so the touchpad is only the map mod's. M is unbound with it.
+    // KF2_MAPKEY=1 binds both again.
+    public static bool Enabled { get; private set; } = false;
 
     static volatile bool _request, _open, _closeHeld;
     static bool _queued, _viewerQueued;

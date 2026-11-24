@@ -1,0 +1,7 @@
+{
+  "id": "kf2.padquit",
+  "name": "Pad quit",
+  "version": "1.0",
+  "author": "KrisEnigma",
+  "description": "Hold a pad button for three seconds to close the game, so a controller can quit without the keyboard. Start / Options / Menu by default; a toast tells you it is counting down."
+}

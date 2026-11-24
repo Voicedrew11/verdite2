@@ -296,7 +296,18 @@ public static class Map
     public const int PadTouchpad = 20;
     public const int PadL3 = 7;      // SDL_CONTROLLER_BUTTON_LEFTSTICK
     public const int PadR3 = 8;      // SDL_CONTROLLER_BUTTON_RIGHTSTICK
-    public const int PadSelect = 4;  // SDL_CONTROLLER_BUTTON_BACK
+    public const int PadSelect = 4;  // SDL_CONTROLLER_BUTTON_BACK. Create on a DualSense, View on Xbox. Unused.
+    public const int PadCircle = 1;  // SDL_CONTROLLER_BUTTON_B. Circle on a DualSense, B on Xbox.
+    public const int PadDpadUp = 11; // SDL_CONTROLLER_BUTTON_DPAD_UP. Toggles the minimap.
+    // Triggers are not SDL buttons. The runtime's pad encoding uses 100 and 101
+    // for them (InputManager), and a ControllerEvent for a trigger is an axis
+    // with Pressed left false, so the button test below never sees it.
+    public const int PadL2 = 100;
+    public const int PadR2 = 101;
+    const int AxisTriggerLeft = 4;   // SDL_CONTROLLER_AXIS_TRIGGERLEFT
+    const int AxisTriggerRight = 5;  // SDL_CONTROLLER_AXIS_TRIGGERRIGHT
+    const float TriggerTrip = 8000f / 32768f; // InputManager's AxisThreshold
+    static bool _triggerHeld;
 
     /// <summary>The pad button that opens and closes the full-screen map.
     /// R3 by default: the touchpad opens the game's own map item (core's MapKey), so
@@ -456,11 +467,17 @@ public static class Map
             // a player who turned the core's map off before would otherwise
             // enable the mod and get nothing. KF2_MAP=0 is the comparison.
             Enabled       = _forcedOn ?? true;
-            PadButton     = view.GetInt(PadButtonKey, PadR3);
+            PadButton     = view.GetInt(PadButtonKey, PadNone);
 
-            // The touchpad is the game's own map item's (core's MapKey), so a value
-            // saved from an older build that bound it to this map is read as R3.
-            if (PadButton == PadTouchpad) PadButton = PadR3;
+            // Circle and the D-pad move the menu cursor. A saved binding that
+            // put the map on either of them, or on the touchpad / Back (those
+            // cycle the map on their own), is dropped.
+            if (PadButton is PadCircle or PadDpadUp or PadSelect or PadTouchpad)
+            {
+                PadButton = PadNone;
+                Settings.PatchSettings.Set(PadButtonKey, PadNone);
+            }
+            RestoreMenuCircle();
 
             // Registered whether or not the feature is on, so the switch under
             // Gameplay is not a dead control for the rest of the session. Enabled
@@ -468,8 +485,8 @@ public static class Map
             RegisterUi();
 
             Console.WriteLine(Enabled
-                ? $"[KF2] map: on, G or {PadName(PadButton)} opens the full-screen map, " +
-                  $"N toggles the minimap, Shift+G the tile readout " +
+                ? $"[KF2] map: on, touchpad or Back cycles off, minimap, full map; " +
+                  $"G opens the full map, N the minimap, Shift+G the tile readout " +
                   $"(minimap {(Minimap ? "on" : "off")}, " +
                   $"{(Pause ? "the world pauses while it is up" : "the world keeps running")}" +
                   $"{(_probe ? ", probing" : "")})"
@@ -512,8 +529,9 @@ public static class Map
         // thousands of times a second.
         //
         // **M is not taken.** It opens the game's own map item (core's MapKey), and
-        // so does the pad's touchpad. G is the full-screen map here, Shift+G the
-        // docked readout, N the minimap.
+        // so does the pad's touchpad, unless this mod has taken it. G is the
+        // full-screen map here, Shift+G the docked readout, N the minimap. The
+        // touchpad and Xbox Back cycle off, minimap, full map.
         _onKey = e =>
         {
             if (!Enabled || !e.Pressed || PopupManager.AnyOpen || HotkeyGate.Typing || Remaster.Editor.Open) return;
@@ -548,8 +566,33 @@ public static class Map
             // it against. An axis event carries Button = -1 and Pressed = false, so
             // the Pressed test already excludes it -- and PadNone is that same -1,
             // which is why "off" is checked before the button rather than after.
-            if (!Enabled || !e.Pressed || PadButton == PadNone) return;
-            if (e.Button != PadButton || PopupManager.AnyOpen) return;
+            // A trigger is that axis event. Held is tracked across it so a trigger
+            // that sits past the trip point opens the map once, not every report.
+            if (!Enabled) return;
+
+            // Touchpad on a DualSense, Back / View on an Xbox pad. Circle and the
+            // D-pad stay the menu's. Off, then the minimap, then the full map.
+            if (e.Pressed && (e.Button == PadTouchpad || e.Button == PadSelect)
+                && !PopupManager.AnyOpen && !HotkeyGate.Typing && !Remaster.Editor.Open)
+            {
+                CyclePadMap();
+                return;
+            }
+
+            if (PadButton == PadNone) return;
+
+            if (PadButton is PadL2 or PadR2)
+            {
+                int axis = PadButton == PadL2 ? AxisTriggerLeft : AxisTriggerRight;
+                if (e.Axis != axis) return;
+                bool down = e.Value > TriggerTrip;
+                bool rose = down && !_triggerHeld;
+                _triggerHeld = down;
+                if (rose && !PopupManager.AnyOpen) ToggleFullscreen();
+                return;
+            }
+
+            if (!e.Pressed || e.Button != PadButton || PopupManager.AnyOpen) return;
             ToggleFullscreen();
         };
         Event.AddListener(_onPad);
@@ -587,6 +630,9 @@ public static class Map
     {
         PadNone     => "none",
         PadTouchpad => "Touchpad",
+        PadL2       => "L2",
+        PadR2       => "R2",
+        PadCircle   => "Circle",
         PadL3       => "L3",
         PadR3       => "R3",
         PadSelect   => "Select",
@@ -666,9 +712,45 @@ public static class Map
     public static void ToggleFullscreen()
         => MapFullscreen.Instance.IsOpen = !MapFullscreen.Instance.IsOpen;
 
+    /// <summary>Off, then the corner minimap, then the full map, then off.</summary>
+    static void CyclePadMap()
+    {
+        bool big = MapFullscreen.Instance.IsOpen;
+        if (big)
+        {
+            MapFullscreen.Instance.IsOpen = false;
+            SetMinimap(false);
+            return;
+        }
+        if (Minimap)
+        {
+            SetMinimap(false);
+            MapFullscreen.Instance.IsOpen = true;
+            return;
+        }
+        SetMinimap(true);
+    }
+
+    /// <summary>Puts Circle back on the menu binding. A previous layout took it
+    /// off so the map could have the button, and the menu cursor lost Back.</summary>
+    static void RestoreMenuCircle()
+    {
+        var game = ConfigManager.Game;
+        var changed = false;
+        foreach (var pad in new[] { game.Pad, game.PadAnalog })
+        {
+            var circle = pad.Circle ?? [];
+            if (Array.IndexOf(circle, PadCircle) >= 0) continue;
+            pad.Circle = circle.Concat([PadCircle]).ToArray();
+            changed = true;
+        }
+        if (changed) ConfigManager.SaveGame();
+    }
+
     public static void SetPadButton(int button)
     {
         PadButton = button;
+        _triggerHeld = false;
         Settings.PatchSettings.Set(PadButtonKey, button);
     }
 

@@ -90,7 +90,9 @@ public static class ToastNotifications
         var right = areaMax.X - margin;
         var stackY = areaMin.Y + margin;
 
-        var draw = ImGui.GetWindowDrawList();
+        // Foreground, not this window's list. The minimap is a window created
+        // later in the frame, so a window list drawn here ends up underneath it.
+        var draw = ImGui.GetForegroundDrawList();
         draw.PushClipRect(areaMin, areaMax, true);
 
         foreach (var toast in toasts)

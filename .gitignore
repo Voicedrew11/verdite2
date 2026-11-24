@@ -48,6 +48,17 @@ __pycache__/
 # ModLoader compiles mods/ at run time and caches the assemblies here.
 mods/.cache/
 
+# Community mods, junctioned in from verdite2-mods for the Playnite working
+# directory. The sources live in that checkout, not in this tree.
+mods/iteminfo/
+mods/jump/
+mods/keyhint/
+mods/quicksave/
+mods/quickuse/
+mods/reveal/
+mods/runkey/
+mods/spellinfo/
+
 # RateCensus writes its dump here by default (KF2_RATECENSUS_OUT); it is a
 # diagnostic reading of one session, not source. One was committed once.
 ratecensus.txt

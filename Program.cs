@@ -1113,7 +1113,8 @@ Kf2.AutoReload.Install();
 // switches (KF2_MAP*) read only with the mod enabled; docs/ENV_VARS.md has them.
 
 // M, or the touchpad, opens the game's own map item (PIRATE'S, MINER'S or NECRON'S
-// MAP) through the ITEM page's viewer, as using it there does. Off with KF2_MAPKEY=0;
+// MAP) through the ITEM page's viewer, as using it there does. Unbound here, because
+// the map mod uses the touchpad. On again with KF2_MAPKEY=1;
 // KF2_MAPKEY_TEST=<seconds> opens it that many seconds into the first area. See
 // "The maps" in docs/GAME_INTERNALS.md.
 Kf2.MapKey.Configure(Environment.GetEnvironmentVariable("KF2_MAPKEY"),
