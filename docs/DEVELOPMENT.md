@@ -278,7 +278,8 @@ Four switches, each usable alone:
 - **Invariants**, every frame but for 600 after an overlay load, a death or a
   macro: HP ≤ max HP, MP ≤ max MP, area 0-7, level 1-99, position inside the
   80×80 tile map, every live creature's descriptor pointer inside
-  `0x80172624..0x801758E4`, and stage 3 returning (a stall of 6000 frames, named
+  `0x80172624..0x801758E4`, no disc read over a deferred consumer's unread data
+  (`disc-race`, `patches/DiscRace.cs`), and stage 3 returning (a stall of 6000 frames, named
   by the recompiled frames on the game thread's stack).
 
 The policy cannot leave a loop of the game's that polls the pad with no frame
@@ -353,6 +354,12 @@ for long enough to find the process.
   player walked into the same crash): a texture read landed over the walked crossing's
   object data before the loader copied it out. `patches/StreamGuard.cs` fixes it; see "A
   walked crossing's objects came from a texture" in [GAME_INTERNALS.md](GAME_INTERNALS.md).
+- **A crash in the game's own code is not the macro's until a run shows it.** Seed 1024
+  was written off as `goto`'s doing and a player met it a month later. `goto`, `warp`
+  and turbo change *when* things happen, not what the game can do, and a race they
+  expose is still a race. Triage such a finding as a real one: what did the game's own
+  state look like (the crash dump's tables, a probe of the loader), and does it need the
+  macro, or only the timing the macro made?
 - **With `--guards off`** the hangs above were at first taken for the wall
   slide `WallGuard` fences; they come back with the guards on, and are the
   object walk's. Neither guard's fault has been reached by the fuzzer yet.

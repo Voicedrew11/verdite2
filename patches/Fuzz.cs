@@ -63,6 +63,7 @@ public static class Fuzz
     const long PadStall = 20000;
     static long _padReads;
 
+    static long _discRaces;
     static long _heapOverruns;
 
     /// <summary>Emulated vblanks (a wall-clock 60 Hz) with no frame before the same.</summary>
@@ -430,6 +431,14 @@ public static class Fuzz
         {
             _heapOverruns = HeapGuard.Overruns;
             Violation("heap-full", $"area={m.ReadU8(Area)}");
+        }
+
+        // Two disc reads over the same RAM in one frame for different requesters, with
+        // no guard to repair it (DiscRace): an order only the port's instant drive makes.
+        if (DiscRace.Unhandled != _discRaces)
+        {
+            _discRaces = DiscRace.Unhandled;
+            Violation("disc-race", $"area={m.ReadU8(Area)}");
         }
 
         bool dead = m.ReadU8(State) == StateDead;

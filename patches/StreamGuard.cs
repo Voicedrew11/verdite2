@@ -59,6 +59,14 @@ public static class StreamGuard
     static long _restored;
     static double _lastLog = double.NegativeInfinity;
 
+    /// <summary>Both hooks are on: the loader's reads are repaired, and
+    /// <see cref="LoaderRan"/> fires.</summary>
+    public static bool Hooked { get; private set; }
+
+    /// <summary>After every call of the area loader: the point its waiting step, if
+    /// any, has copied its read out.</summary>
+    public static event Action? LoaderRan;
+
     /// <summary>How many times the loader's buffer was put back.</summary>
     public static long Restored => _restored;
 
@@ -100,6 +108,7 @@ public static class StreamGuard
 
         HookManager.Commit();
         bool ok = HookAttach.Installed(pump) && HookAttach.Installed(loader);
+        Hooked = ok;
         Console.WriteLine(ok
             ? $"[KF2] stream guard: on, the disc queue at 0x{Pump:X8} and the area loader at 0x{Loader:X8}"
             : "[KF2] stream guard: not installed; a texture can overwrite a walked crossing's objects.");
@@ -126,6 +135,7 @@ public static class StreamGuard
         if (_holding && m.ReadU16(LoaderStep) == _forStep) Restore(m);
         orig(c, m);
         if (_holding && m.ReadU16(LoaderStep) != _forStep) _holding = false;
+        LoaderRan?.Invoke();
     }
 
     static bool IsLoaderRead(IMemory m, uint slot)
@@ -133,9 +143,12 @@ public static class StreamGuard
         if (slot - 0x80000000u >= RecompOne.Runtime.Runtime.RamSize) return false;
         if (m.ReadU8(slot) == 0) return false;
         if (m.ReadU32(slot + 0xCu) != Buffer) return false;
-        uint callback = m.ReadU32(slot + 0x14u);
-        return callback >= LoaderCodeStart && callback < LoaderCodeEnd;
+        return IsLoaderCallback(m.ReadU32(slot + 0x14u));
     }
+
+    /// <summary>A queue callback that belongs to the area loader.</summary>
+    public static bool IsLoaderCallback(uint callback) =>
+        callback >= LoaderCodeStart && callback < LoaderCodeEnd;
 
     static void Keep(IMemory m, ushort step)
     {

@@ -1848,6 +1848,24 @@ The guard put back 36,848 bytes before step 3. Seeds 1000-1035: 36 of 36 clean; 
 in seed 1024 only. **Not reproduced on the player's machine**: their RAM dump was not
 attached. The crash signature, overlay and loader state match seed 1024.
 
+**Watching for the class** (`patches/DiscRace.cs`). The fault is not this buffer's: it
+is that the port's drive finishes a read at once, and a hitch delivers several vblanks
+in one frame, so a read can land on RAM another requester read into before it copied the
+data out. The console's drive never allowed that. Most requesters use their read in its
+callback, which the queue runs before it starts the next read, so nothing can race
+them. A *deferred consumer* only marks its read ready in the callback and copies it out
+later. `DiscRace.DeferredConsumers` lists them by their callbacks; today that is the
+area loader's five step callbacks, and not its type `0x40` stream (callback
+`0x80016F50`), which the queue uses chunk by chunk itself. A read by anyone else over a
+deferred consumer's live read is a race. With a guard that repairs it, the race counts
+as handled; any other is logged (`[KF2] disc race:`) and is a fuzz violation
+(`disc-race`). In 48 fuzz runs with the guards on it found exactly the one race the stream guard
+repaired. With `KF2_STREAMGUARD=0` it flags seed 1024 before the crash; it then falls back
+to clearing live reads at frame boundaries, which also flags the blocking loads, so that
+mode is for comparison only. A raw rule ("two requesters over the same RAM in one frame")
+found no shared RAM at all other than `0x801B6FA8`, and no deferred consumer other than
+the loader. A newly found one is a new row.
+
 ### `func_8002C3A8` is the floor-height query
 
 `func_8002C3A8(mode, x, z, radius, /*sp+0x10*/ height)` returns the ground `Y` for

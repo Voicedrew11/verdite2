@@ -661,6 +661,16 @@ Kf2.HeapGuard.Install();
 Kf2.StreamGuard.Configure(Environment.GetEnvironmentVariable("KF2_STREAMGUARD"));
 Kf2.StreamGuard.Install();
 
+// The class of fault behind it: the port's drive finishes a read at once and a
+// hitch can deliver several vblanks in one frame, so two reads can land on the same
+// RAM before the one that read first has copied it out, which the console's drive
+// never allowed. This reports each such read (a fuzz violation, disc-race) unless a
+// guard repairs it; DiscRace.DeferredConsumers lists who copies out late.
+//
+//     KF2_DISCRACE=0      no report
+Kf2.DiscRace.Configure(Environment.GetEnvironmentVariable("KF2_DISCRACE"));
+Kf2.DiscRace.Install();
+
 // Dithering. Clearing the GPU's dither bit is one pre/post hook pair on each of
 // PutDrawEnv and DrawOTag, and it is a patch rather than a mod because it is a
 // picture the port should be able to offer without a package having to load: the
