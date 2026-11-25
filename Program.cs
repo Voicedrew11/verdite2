@@ -649,6 +649,18 @@ Kf2.WallGuard.Install();
 Kf2.HeapGuard.Configure(Environment.GetEnvironmentVariable("KF2_HEAPGUARD"));
 Kf2.HeapGuard.Install();
 
+// A walked crossing's loader reads each part of the next area into one buffer and
+// copies it out on its next call; the texture loader reads into the same buffer.
+// With every read instant, the disc queue could retire a picture's read over the
+// area's objects before the loader copied them (a crash entering fdat08). The guard
+// keeps the buffer when a loader read retires and puts it back before the step that
+// reads it. See "A walked crossing's objects came from a texture" in
+// docs/GAME_INTERNALS.md.
+//
+//     KF2_STREAMGUARD=0   the recompiled loader alone -- comparison only
+Kf2.StreamGuard.Configure(Environment.GetEnvironmentVariable("KF2_STREAMGUARD"));
+Kf2.StreamGuard.Install();
+
 // Dithering. Clearing the GPU's dither bit is one pre/post hook pair on each of
 // PutDrawEnv and DrawOTag, and it is a patch rather than a mod because it is a
 // picture the port should be able to offer without a package having to load: the

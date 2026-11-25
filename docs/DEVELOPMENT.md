@@ -349,7 +349,10 @@ for long enough to find the process.
   put the player at an area exit and `fdat08` loaded; it crashes the same with
   `Stage13`, `ModelWalk` and `MoPose` all recompiled. `goto` places the player
   where no path leads, so this is most likely the macro's, not a bug a player
-  meets. Turn macros off (`--no-macros`) to triage anything like it.
+  meets. Turn macros off (`--no-macros`) to triage anything like it. **It is not the macro's** (2026-11-25: a
+  player walked into the same crash): a texture read landed over the walked crossing's
+  object data before the loader copied it out. `patches/StreamGuard.cs` fixes it; see "A
+  walked crossing's objects came from a texture" in [GAME_INTERNALS.md](GAME_INTERNALS.md).
 - **With `--guards off`** the hangs above were at first taken for the wall
   slide `WallGuard` fences; they come back with the guards on, and are the
   object walk's. Neither guard's fault has been reached by the fuzzer yet.

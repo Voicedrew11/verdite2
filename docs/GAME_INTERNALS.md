@@ -1796,6 +1796,58 @@ model the game's view admitted: 1.4 million lookups in 12 fuzz runs, 0 disagreem
 not settle into `fdat20`, and their RAM dump was not attached. The fix is from the
 same routine and the same stale-slot shape.
 
+A crash with the same signature inside the game's own view had another cause: see the
+next section.
+
+### A walked crossing's objects came from a texture
+
+Reported 2026-11-25 by a player at 0.6.1: `unmapped address: 0x3B2E13F4` in
+`func_80017764` under `func_80032CD8` from `ModelWalk.Ordinary`, about a second after
+`fdat08` loaded over `fdat05` (walking area 1 into area 2). Fuzz seed 1024 had read the
+same address after a `goto` onto that exit, with the walk recompiled too, and was put
+down to the macro. It is not the macro's, and not a stale slot: the whole object table was
+garbage (162 of 349 records with model ids past `0x140`, every creature descriptor
+unloaded), so the model lookup was only the first routine to touch it. With the lookup
+guarded, the run crashed next in `func_8003B9EC` under stage 4.
+
+**The loader's buffer is shared.** A walk streams the next area in
+(`func_8001689C`, steps at `u16[0x8017E05E]`, `0xF0` while a read is in flight). Steps 0
+and 2 read `FDAT.T` entries `3a` (the map) and `3a+1` (descriptors, creatures, objects)
+into `0x801B6FA8`. The read's callback sets the next step, and that step copies the
+buffer out on the loader's next call. The texture loader (the queue's type `0x30`
+requests, callback `0x80014410`) reads a picture's second part into the same buffer: after
+the first part it rewrites its own slot to `dst 0x801B6FA8`, the next sectors, and
+state 0.
+
+**Instant reads let the texture win.** The queue (`func_8001794C`, one slot a call, run
+from each vblank callback) served, inside one frame of seed 1024: entry 7 (14 sectors
+from LBA 545, correct, step set to 3), a model (26 sectors), a palette (2 sectors from
+LBA 7926), and that palette's second part, 18 sectors from LBA 7928 into `0x801B6FA8`.
+The loader then ran step 3 on the picture's bytes; the buffer's first word read 0 where
+`FDAT.T` entry 7 starts with `0x32C0`. On the console each read takes tens of
+milliseconds, so the loader runs its step long before the texture gets there. In the
+port every read completes at once, and several vblanks inside one frame (turbo; a hitch
+in real play, such as a cold overlay's first frames) serve the whole chain before stage 7
+runs.
+
+**The fix** (`patches/StreamGuard.cs`): when the queue retires a loader read into the
+buffer (a slot with `dst 0x801B6FA8` and a callback in `0x80016800..0x80017000`, the call
+that moves the step off `0xF0`), the 0x11000 bytes are kept, and if they have changed when
+the loader runs that step, they are put back first. The texture's part was already
+handled in its own callback; one not yet checked fails the queue's checksum
+(`func_80017DB0`) and is read again, which is the game's own retry. **Holding the queue
+instead deadlocked**: a second crossing object waits in stage 2 (`func_800162DC` ->
+`func_80017818`, a VSync loop) for the queue to drain, while the loader waits for stage 7.
+Deferring `LibCd.CdRead`'s completion callback to the next tick did not help either, since
+the queue checks completion by itself.
+
+**Measured:** seed 1024 at 20000 frames crashes with `KF2_STREAMGUARD=0` (the player's
+stack, `func_80017764 > func_80032CD8 > ModelWalk.Ordinary > WalkObjects`) and plays
+clean with the guard: area 2 loaded (`22222`), objects sane, and the walk back to area 1.
+The guard put back 36,848 bytes before step 3. Seeds 1000-1035: 36 of 36 clean; it fired
+in seed 1024 only. **Not reproduced on the player's machine**: their RAM dump was not
+attached. The crash signature, overlay and loader state match seed 1024.
+
 ### `func_8002C3A8` is the floor-height query
 
 `func_8002C3A8(mode, x, z, radius, /*sp+0x10*/ height)` returns the ground `Y` for
