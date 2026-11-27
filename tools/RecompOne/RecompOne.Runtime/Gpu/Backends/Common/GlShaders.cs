@@ -58,6 +58,42 @@ internal static class GlShaders
         }
         """;
 
+    // hunterk's fakelottes (RetroArch shaders_slang/crt/fakelottes.slang)
+    // with the fakelottes preset: shadow mask 1, no curvature, maskDark 0.78,
+    // maskLight 1.55, scanlines 0.40 over a base of 1.0, CRT gamma 2.5 in and monitor
+    // gamma 2.2 out. Runs in place of DownsampleUpFs: on the scaled picture, or on the
+    // box of it when Downsample is on. uSrcSize is the game's own size, so the scanlines
+    // follow the game's lines whatever the texture's size.
+    public const string DownsampleCrtFs = """
+        #version 330 core
+        in vec2 vUv;
+        uniform sampler2D uSrc;
+        uniform vec2 uSrcSize;
+        uniform vec2 uOutSize;
+        out vec4 oColor;
+        const float maskDark = 0.78, maskLight = 1.55;
+        const float scanB = 0.40, scanBase = 1.0;
+        const float crtGamma = 2.5, monitorGamma = 2.2;
+        vec3 shadowMask(vec2 pos) {
+            vec3 m = vec3(maskDark);
+            float line = maskLight;
+            float odd = fract(pos.x * 0.166666666) < 0.5 ? 1.0 : 0.0;
+            if (fract((pos.y + odd) * 0.5) < 0.5) line = maskDark;
+            pos.x = fract(pos.x * 0.333333333);
+            if (pos.x < 0.333) m.r = maskLight;
+            else if (pos.x < 0.666) m.g = maskLight;
+            else m.b = maskLight;
+            return m * line;
+        }
+        void main() {
+            vec3 res = pow(texture(uSrc, vUv).rgb, vec3(crtGamma)); // domain-ok: texture RGB in [0,1]
+            res *= shadowMask(vUv * uOutSize * 1.0001);
+            float y = vUv.y - 0.25 / uSrcSize.y;
+            res *= scanBase + scanB * sin(y * 2.0 * 3.1415 * uSrcSize.y);
+            oColor = vec4(pow(max(res, vec3(0.0)), vec3(1.0 / monitorGamma)), 1.0); // domain-ok: clamped to >= 0
+        }
+        """;
+
     public const string PresentFs = """
         #version 330 core
         in vec2 vUv;

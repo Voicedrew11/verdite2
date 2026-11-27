@@ -97,13 +97,26 @@ public static class PortSettings
         Stored = Stored.Float, Ui = Ui.None,
     };
 
-    /// <summary>The runtime's downsample (0129): the scaled picture averaged back to
-    /// 240 lines and scaled evenly to the window. Dimmed at 240P, which has nothing
-    /// to average. The runtime's own key, as <see cref="Resolution"/>'s is.</summary>
+    /// <summary>The runtime's downsample (0129), a part of <see cref="ScreenFilter"/>: the
+    /// scaled picture averaged back to 240 lines and scaled evenly to the window. The
+    /// runtime's own key, as <see cref="Resolution"/>'s is.</summary>
     public static readonly PortSetting Downsample = Switch("Downsample", "KF2_DOWNSAMPLE", "Downsample to 240 lines",
-        DisplayPage, "DOWNSAMPLE", () => RecompOne.Runtime.Hle.GlVram.Downsample, v => RecompOne.Runtime.Hle.GlVram.Downsample = v, false,
-        tip: "Renders at the chosen resolution, then averages it back to the original 240 lines: smooth edges that keep the PSX's pixels.",
-        usable: () => Resolution.Live() > 1);
+        null, null, () => RecompOne.Runtime.Hle.GlVram.Downsample, v => RecompOne.Runtime.Hle.GlVram.Downsample = v, false,
+        tip: "Renders at the chosen resolution, then averages it back to the original 240 lines: smooth edges that keep the PSX's pixels.");
+
+    /// <summary>A part of <see cref="ScreenFilter"/>: the fakelottes CRT
+    /// pass over the scaled picture, with its scanlines at the game's lines. Needs neither the
+    /// downsample nor a scale above 1.</summary>
+    public static readonly PortSetting Crt = Switch("Crt", "KF2_CRT", "CRT shader",
+        null, null, () => RecompOne.Runtime.Hle.GlVram.Crt, v => RecompOne.Runtime.Hle.GlVram.Crt = v, false);
+
+    /// <summary>OFF is neither; DOWNSAMPLE averages the scaled picture back to 240 lines; CRT is the
+    /// shader; DOWNSAMPLE CRT runs the shader on the downsampled picture. Step =
+    /// downsample + 2 * CRT. At 240P, DOWNSAMPLE has nothing to average and changes nothing.</summary>
+    public static readonly PortSetting ScreenFilter = Combine("row.screenfilter", DisplayPage, "SCREEN FILTER", [Downsample, Crt],
+        [0, 1, 2, 3], Named([0, 1, 2, 3], "OFF", "DOWNSAMPLE", "CRT", "DOWNSAMPLE CRT"),
+        get => get(Downsample) + 2 * get(Crt),
+        (v, _) => [(int)v & 1, ((int)v >> 1) & 1]);
 
     static readonly double[] Aspects = [.. Widescreen.Presets.Select(p => (double)p.Ratio)];
 
@@ -532,7 +545,7 @@ public static class PortSettings
     /// <summary>The game's page, in order. Each row is one setting or a combined row.</summary>
     public static readonly PortSetting[] Menu =
     [
-        Display, Resolution, Downsample, Aspect, HudAnchor, FrameRateRow,
+        Display, Resolution, ScreenFilter, Aspect, HudAnchor, FrameRateRow,
         TextureFilter, PerPixel, AmbientOcclusionRow, ShadingRow,
         RenderDist, FogMode, Water,
         Language, Font, AutoReloadOn, GearCompareOn, CursorMemoryOn, NpcDialogueOn, EnemyTurnSpeed,
@@ -544,7 +557,7 @@ public static class PortSettings
     /// <c>settings</c> verb and the start-up check read.</summary>
     public static readonly PortSetting[] All =
     [
-        Display, Resolution, Downsample, Aspect, HudAnchor, FrameRate, Smoothing,
+        Display, Resolution, Downsample, Crt, Aspect, HudAnchor, FrameRate, Smoothing,
         Mipmaps, Anisotropy, PerPixel, Ao, AoQuality, NoDitherOn, TrueColorOn,
         RenderDist, FogMode, MurkyWater, WaterWaves, Planar,
         Language, Font, AutoReloadOn, GearCompareOn, CursorMemoryOn, ShortcutsOn, NpcDialogueOn, EnemyTurnSpeed, FocusPauseOn,
