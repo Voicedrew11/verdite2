@@ -76,7 +76,7 @@ HUD to OFF, pointing at row 1 moved it back, a click at (5,230) opened the quest
 |---|---|---|---|
 | DISPLAY | DISPLAY | WINDOWED, FULLSCREEN, BORDERLESS | the runtime's `Fullscreen` and `Borderless` |
 | | RESOLUTION | 240P … 1920P | `RenderScale` 1..8 |
-| | DOWNSAMPLE | OFF, ON | the runtime's `Downsample` (0129), dimmed at 240P |
+| | SCREEN FILTER | OFF, DOWNSAMPLE, CRT, DOWNSAMPLE CRT | the runtime's `Downsample` (0129) and `Crt`: box alone, the CRT pass alone, or the CRT over the boxed picture |
 | | ASPECT | 4/3, 16/10, 16/9, 21/9 | `kf2.widescreen.aspect` |
 | | HUD AT EDGES | OFF, ON | `kf2.widescreen.hud`, dimmed at 4/3 |
 | | FRAME RATE | ORIGINAL, 30 … 360, UNCAPPED | `kf2.framepacing.fps` and the five `kf2.smoothing.*` keys: ORIGINAL is the setup's 15 fps with the smoothing off, any other rate smooths; a rate with the smoothing off (the Settings window) shows `NO SMOOTH` |

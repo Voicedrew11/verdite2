@@ -3975,6 +3975,15 @@ Measured at 8x on a 3840x2160 fullscreen: the snap is 3840x2160, 9x9 squares of 
 mechanism is `tools/RecompOne/patches/0129`. GL 3.3 and up; the 2.1 context
 keeps the plain present.
 
+**CRT** under DISPLAY (`KF2_CRT=1`; the runtime's `Crt` key) is hunterk's fakelottes shader: a shadow mask and scanlines
+over the picture, with `uSrcSize` set to the game's own 240 lines so the scanlines
+follow the game rather than the render scale. It runs in place of `DownsampleUpFs`
+and is offered with Downsample as one **SCREEN FILTER** row: OFF, DOWNSAMPLE,
+CRT, DOWNSAMPLE CRT. With Downsample off it reads the scaled picture itself; with
+it on it reads the boxed picture. Off by default, and skipped on the GL 2.1
+context, on a 24-bit frame and when the shader program fails to build. Japanese
+label: がめんフィルタ.
+
 ## A shop overwrote the textures with the atlas's old texels
 
 **Fixed; confirmed by eye in the shop.** Reported from play: after opening and
