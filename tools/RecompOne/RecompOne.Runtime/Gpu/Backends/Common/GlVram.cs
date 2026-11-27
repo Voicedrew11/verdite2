@@ -21,7 +21,8 @@ public static class GlVram
     public static bool Downsample { get; set; }
 
     /// <summary>Personal build. The fakelottes CRT pass in place of the downsample's
-    /// sharp bilinear; only with <see cref="Downsample"/> on.</summary>
+    /// sharp bilinear. It reads the scaled picture itself, so <see cref="Downsample"/> may be
+    /// off and the scale 1; with the downsample on it reads the box of the picture instead.</summary>
     public static bool Crt { get; set; }
 
     /// <summary>Keep a scaled copy of every framebuffer readback, so an upload of

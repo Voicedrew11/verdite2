@@ -2833,7 +2833,9 @@ public sealed partial class GlCore : IGpuBackend
         uint outTex = ApplyPostFx(_presentTex, fbW, fbH);
         uint outFbo = outTex == _postTex ? _postFbo : _presentFbo;
         int outTexW = fbW, outTexH = fbH;
-        if (GlVram.Downsample && presentScale > 1 && !rgb24 && outW > 0 && outH > 0
+        // Personal build: the CRT pass runs on the boxed picture too, so it asks for the
+        // box stage itself, with or without the downsample and at a scale of 1.
+        if ((GlVram.Crt || (GlVram.Downsample && presentScale > 1)) && !rgb24 && outW > 0 && outH > 0
             && Downsample(outTex, presentScale, w1x, h1x, outW, outH))
             (outTex, outFbo, outTexW, outTexH) = (_dsUpTex, _dsUpFbo, outW, outH);
         EndGpuTimer(compQuery, GpuWork.Composite, compStart, Diagnostics.GpuTimes.Pass.Composite);
@@ -2896,24 +2898,37 @@ public sealed partial class GlCore : IGpuBackend
             (_dsUpW, _dsUpH) = (outW, outH);
         }
 
+        // Asked for by the CRT alone: with its program missing there is nothing to run,
+        // and the plain up pass would switch the downsample on behind the setting's back.
+        bool crt = GlVram.Crt && _dsCrtProg != 0;
+        if (!crt && !(GlVram.Downsample && factor > 1)) return false;
+
         _gl.Disable(EnableCap.DepthTest);
         _gl.Disable(EnableCap.Blend);
         _gl.Disable(EnableCap.ScissorTest);
         _gl.BindVertexArray(_presentVao);
         _gl.ActiveTexture(TextureUnit.Texture0);
 
-        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _dsBoxFbo);
-        _gl.Viewport(0, 0, (uint)w1x, (uint)h1x);
-        _gl.UseProgram(_dsBoxProg);
-        _gl.BindTexture(TextureTarget.Texture2D, srcTex);
-        _gl.Uniform1(_uDsFactor, factor);
-        _gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
+        // The box is the downsample's first stage. With the downsample off, the CRT pass
+        // reads the scaled picture as it is: its scanlines are counted in the game's
+        // lines (uSrcSize below), not in the texels it samples.
+        bool box = GlVram.Downsample && factor > 1;
+        uint input = srcTex;
+        if (box)
+        {
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _dsBoxFbo);
+            _gl.Viewport(0, 0, (uint)w1x, (uint)h1x);
+            _gl.UseProgram(_dsBoxProg);
+            _gl.BindTexture(TextureTarget.Texture2D, srcTex);
+            _gl.Uniform1(_uDsFactor, factor);
+            _gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
+            input = _dsBoxTex;
+        }
 
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _dsUpFbo);
         _gl.Viewport(0, 0, (uint)outW, (uint)outH);
-        bool crt = GlVram.Crt && _dsCrtProg != 0;
         _gl.UseProgram(crt ? _dsCrtProg : _dsUpProg);
-        _gl.BindTexture(TextureTarget.Texture2D, _dsBoxTex);
+        _gl.BindTexture(TextureTarget.Texture2D, input);
         _gl.Uniform2(crt ? _uCrtSrcSize : _uDsSrcSize, (float)w1x, h1x);
         _gl.Uniform2(crt ? _uCrtOutSize : _uDsOutSize, (float)outW, outH);
         _gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);

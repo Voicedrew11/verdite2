@@ -69,7 +69,6 @@ internal sealed class DisplaySettingsSection : ISettingsSection
 
         if (ImGui.IsItemHovered()) ImGui.SetTooltip(Localization.T("settings.display.downsample_hint"));
 
-        ImGui.BeginDisabled(!downsample);
         var crt = Hle.GlVram.Crt;
         if (ImGui.Checkbox("CRT (fakelottes-kris)", ref crt))
         {
@@ -77,7 +76,6 @@ internal sealed class DisplaySettingsSection : ISettingsSection
             ConfigManager.SaveView(PanelManager.Panels);
             Hle.GlVram.Crt = crt;
         }
-        ImGui.EndDisabled();
 
         // How big the picture is drawn, and how wide it is presented, are the same
         // kind of choice, so a port offering an aspect ratio has somewhere to put it

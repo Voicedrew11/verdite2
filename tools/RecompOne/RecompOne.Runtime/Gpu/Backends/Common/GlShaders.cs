@@ -61,7 +61,9 @@ internal static class GlShaders
     // Personal build. hunterk's fakelottes (RetroArch shaders_slang/crt/fakelottes.slang)
     // with the fakelottes-kris preset: shadow mask 1, no curvature, maskDark 0.78,
     // maskLight 1.55, scanlines 0.40 over a base of 1.0, CRT gamma 2.5 in and monitor
-    // gamma 2.2 out. Runs in place of DownsampleUpFs, on the boxed 240-line picture.
+    // gamma 2.2 out. Runs in place of DownsampleUpFs: on the scaled picture, or on the
+    // box of it when Downsample is on. uSrcSize is the game's own size, so the scanlines
+    // follow the game's lines whatever the texture's size.
     public const string DownsampleCrtFs = """
         #version 330 core
         in vec2 vUv;
