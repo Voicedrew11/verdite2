@@ -104,7 +104,7 @@ public static class PortSettings
         null, null, () => RecompOne.Runtime.Hle.GlVram.Downsample, v => RecompOne.Runtime.Hle.GlVram.Downsample = v, false,
         tip: "Renders at the chosen resolution, then averages it back to the original 240 lines: smooth edges that keep the PSX's pixels.");
 
-    /// <summary>Personal build, a part of <see cref="ScreenFilter"/>: the fakelottes-kris CRT
+    /// <summary>Personal build, a part of <see cref="ScreenFilter"/>: the fakelottes CRT
     /// pass over the scaled picture, with its scanlines at the game's lines. Needs neither the
     /// downsample nor a scale above 1.</summary>
     public static readonly PortSetting Crt = Switch("Crt", "KF2_CRT", "CRT shader",
