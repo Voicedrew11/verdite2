@@ -58,7 +58,7 @@ internal static class GlShaders
         }
         """;
 
-    // Personal build. hunterk's fakelottes (RetroArch shaders_slang/crt/fakelottes.slang)
+    // hunterk's fakelottes (RetroArch shaders_slang/crt/fakelottes.slang)
     // with the fakelottes preset: shadow mask 1, no curvature, maskDark 0.78,
     // maskLight 1.55, scanlines 0.40 over a base of 1.0, CRT gamma 2.5 in and monitor
     // gamma 2.2 out. Runs in place of DownsampleUpFs: on the scaled picture, or on the

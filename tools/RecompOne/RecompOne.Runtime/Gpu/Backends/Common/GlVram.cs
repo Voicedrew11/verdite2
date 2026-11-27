@@ -20,7 +20,7 @@ public static class GlVram
     /// effect at a scale of 1, where there is nothing to average.</summary>
     public static bool Downsample { get; set; }
 
-    /// <summary>Personal build. The fakelottes CRT pass in place of the downsample's
+    /// <summary>The fakelottes CRT pass in place of the downsample's
     /// sharp bilinear. It reads the scaled picture itself, so <see cref="Downsample"/> may be
     /// off and the scale 1; with the downsample on it reads the box of the picture instead.</summary>
     public static bool Crt { get; set; }

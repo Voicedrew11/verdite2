@@ -111,7 +111,7 @@ public static class PortSettings
         null, null, () => RecompOne.Runtime.Hle.GlVram.Crt, v => RecompOne.Runtime.Hle.GlVram.Crt = v, false);
 
     /// <summary>OFF is neither; DOWNSAMPLE averages the scaled picture back to 240 lines; CRT is the
-    /// shader; DOWNSAMPLE + CRT runs the shader on the downsampled picture. Step =
+    /// shader; DOWNSAMPLE CRT runs the shader on the downsampled picture. Step =
     /// downsample + 2 * CRT. At 240P, DOWNSAMPLE has nothing to average and changes nothing.</summary>
     public static readonly PortSetting ScreenFilter = Combine("row.screenfilter", DisplayPage, "SCREEN FILTER", [Downsample, Crt],
         [0, 1, 2, 3], Named([0, 1, 2, 3], "OFF", "DOWNSAMPLE", "CRT", "DOWNSAMPLE CRT"),

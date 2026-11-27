@@ -2833,7 +2833,7 @@ public sealed partial class GlCore : IGpuBackend
         uint outTex = ApplyPostFx(_presentTex, fbW, fbH);
         uint outFbo = outTex == _postTex ? _postFbo : _presentFbo;
         int outTexW = fbW, outTexH = fbH;
-        // Personal build: the CRT pass runs on the boxed picture too, so it asks for the
+        // The CRT pass runs on the boxed picture too, so it asks for the
         // box stage itself, with or without the downsample and at a scale of 1.
         if ((GlVram.Crt || (GlVram.Downsample && presentScale > 1)) && !rgb24 && outW > 0 && outH > 0
             && Downsample(outTex, presentScale, w1x, h1x, outW, outH))
