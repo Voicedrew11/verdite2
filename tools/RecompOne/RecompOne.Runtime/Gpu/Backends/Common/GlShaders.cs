@@ -86,11 +86,11 @@ internal static class GlShaders
             return m * line;
         }
         void main() {
-            vec3 res = pow(texture(uSrc, vUv).rgb, vec3(crtGamma));
+            vec3 res = pow(texture(uSrc, vUv).rgb, vec3(crtGamma)); // domain-ok: texture RGB in [0,1]
             res *= shadowMask(vUv * uOutSize * 1.0001);
             float y = vUv.y - 0.25 / uSrcSize.y;
             res *= scanBase + scanB * sin(y * 2.0 * 3.1415 * uSrcSize.y);
-            oColor = vec4(pow(max(res, vec3(0.0)), vec3(1.0 / monitorGamma)), 1.0);
+            oColor = vec4(pow(max(res, vec3(0.0)), vec3(1.0 / monitorGamma)), 1.0); // domain-ok: clamped to >= 0
         }
         """;
 
